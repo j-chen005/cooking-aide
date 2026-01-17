@@ -1,0 +1,35 @@
+{
+  "name": "cooking-aide",
+  "version": "1.0.0",
+  "description": "A real-time vision application using the Overshoot SDK to read visible text from camera input",
+  "type": "module",
+  "main": "vision.js",
+  "scripts": {
+    "start": "node vision.js",
+    "dev": "node --watch vision.js"
+  },
+  "keywords": [
+    "vision",
+    "overshoot",
+    "text-recognition",
+    "camera",
+    "cooking",
+    "realtime"
+  ],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "@overshoot/sdk": "^1.0.0"
+  },
+  "engines": {
+    "node": ">=14.0.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/yourusername/cooking-aide.git"
+  },
+  "bugs": {
+    "url": "https://github.com/yourusername/cooking-aide/issues"
+  },
+  "homepage": "https://github.com/yourusername/cooking-aide#readme"
+}
