@@ -14,7 +14,7 @@ function App() {
     visionRef.current = new RealtimeVision({
       apiUrl: 'https://cluster1.overshoot.ai/api/v0.2',
       apiKey: import.meta.env.VITE_OVERSHOOT_API_KEY || 'your-api-key',
-      prompt: 'Read any visible text',
+      prompt: 'Describe what you see',
       onResult: (result) => {
         console.log('Vision result:', result.result)
         setResults(prev => [result.result, ...prev].slice(0, 10)) // Keep last 10 results
@@ -121,26 +121,6 @@ function App() {
             >
               {loading ? 'Stopping...' : 'Stop Vision'}
             </button>
-          </div>
-        </div>
-
-        <div className="info-card">
-          <h3>How to use</h3>
-          <ol>
-            <li>Click "Start Vision" to begin camera processing</li>
-            <li>Grant camera permissions when prompted by your browser</li>
-            <li>The service will read any visible text from your camera</li>
-            <li>Results will appear below in real-time</li>
-            <li>Click "Stop Vision" when finished</li>
-          </ol>
-          
-          <div className="info-tip">
-            <strong>💡 Tip:</strong> If you see "Permission denied", check your browser's camera permissions:
-            <ul>
-              <li><strong>Chrome/Edge:</strong> Click the camera icon in the address bar</li>
-              <li><strong>Firefox:</strong> Click the camera icon next to the URL</li>
-              <li><strong>Safari:</strong> Go to Settings → Websites → Camera</li>
-            </ul>
           </div>
         </div>
 
