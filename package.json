@@ -3,10 +3,15 @@
   "version": "1.0.0",
   "description": "A real-time vision application using the Overshoot SDK to read visible text from camera input",
   "type": "module",
-  "main": "vision.js",
   "scripts": {
-    "start": "node vision.js",
-    "dev": "node --watch vision.js"
+    "dev": "concurrently \"npm run dev:server\" \"npm run dev:client\"",
+    "dev:server": "cd server && npm run dev",
+    "dev:client": "cd client && npm run dev",
+    "build": "npm run build:server && npm run build:client",
+    "build:server": "cd server && npm run build",
+    "build:client": "cd client && npm run build",
+    "start": "cd server && npm start",
+    "install:all": "npm install && cd server && npm install && cd ../client && npm install"
   },
   "keywords": [
     "vision",
@@ -14,15 +19,17 @@
     "text-recognition",
     "camera",
     "cooking",
-    "realtime"
+    "realtime",
+    "react",
+    "typescript"
   ],
   "author": "",
   "license": "MIT",
-  "dependencies": {
-    "@overshoot/sdk": "^1.0.0"
+  "devDependencies": {
+    "concurrently": "^8.2.2"
   },
   "engines": {
-    "node": ">=14.0.0"
+    "node": ">=18.0.0"
   },
   "repository": {
     "type": "git",
