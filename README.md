@@ -71,19 +71,20 @@ cd client && npm install && cd ..
 
 ## Configuration
 
-1. Get your API key from [Overshoot](https://overshoot.ai)
+1. Get your API key from [Overshoot Platform](https://overshoot.ai)
 
-2. Create a `.env` file in the `server/` directory:
+2. Create a `.env` file in the `client/` directory:
 ```bash
-cd server
-cp .env.example .env
+cd client
+echo "VITE_OVERSHOOT_API_KEY=your-actual-api-key" > .env
 ```
 
-3. Update `server/.env` with your API key:
+3. Update `client/.env` with your API key:
 ```
-PORT=3001
-OVERSHOOT_API_KEY=your-actual-api-key
+VITE_OVERSHOOT_API_KEY=your-actual-api-key
 ```
+
+**Note:** The Overshoot SDK runs in the browser (client-side) to access your camera, so the API key is configured in the client directory.
 
 ## Development
 
@@ -138,17 +139,17 @@ This will start the compiled backend server. Make sure to build both projects fi
 
 1. Start the development servers: `npm run dev`
 2. Open http://localhost:3000 in your browser
-3. Click "Start Vision" to begin camera processing
-4. The service will read any visible text from your camera
-5. Check the server console for recognized text output
-6. Click "Stop Vision" when finished
+3. Grant camera permissions when prompted
+4. Click "Start Vision" to begin camera processing
+5. The service will read any visible text from your camera
+6. Results will appear in real-time on the page
+7. Click "Stop Vision" when finished
 
 ## API Endpoints
 
 - `GET /api/health` - Health check endpoint
-- `GET /api/vision/status` - Get vision service status
-- `POST /api/vision/start` - Start the vision service
-- `POST /api/vision/stop` - Stop the vision service
+
+**Note:** The vision processing runs entirely in the browser using the Overshoot SDK, so server-side vision endpoints are not required.
 
 ## Scripts
 

@@ -1,42 +1,69 @@
-import { useState, useEffect } from 'react'
-import axios from 'axios'
+import { useState, useEffect, useRef } from 'react'
+import { RealtimeVision } from '@overshoot/sdk'
 import './App.css'
 
-interface VisionStatus {
-  running: boolean
-}
-
 function App() {
-  const [status, setStatus] = useState<VisionStatus>({ running: false })
+  const [isRunning, setIsRunning] = useState(false)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [results, setResults] = useState<string[]>([])
+  const visionRef = useRef<RealtimeVision | null>(null)
 
-  const checkStatus = async () => {
-    try {
-      const response = await axios.get<VisionStatus>('/api/vision/status')
-      setStatus(response.data)
-      setError(null)
-    } catch (err) {
-      console.error('Error checking status:', err)
-      setError('Failed to check vision status')
-    }
-  }
-
+  // Initialize vision instance
   useEffect(() => {
-    checkStatus()
-    const interval = setInterval(checkStatus, 2000) // Check every 2 seconds
-    return () => clearInterval(interval)
+    visionRef.current = new RealtimeVision({
+      apiUrl: 'https://cluster1.overshoot.ai/api/v0.2',
+      apiKey: import.meta.env.VITE_OVERSHOOT_API_KEY || 'your-api-key',
+      prompt: 'Read any visible text',
+      onResult: (result) => {
+        console.log('Vision result:', result.result)
+        setResults(prev => [result.result, ...prev].slice(0, 10)) // Keep last 10 results
+      }
+    })
+
+    return () => {
+      // Cleanup on unmount
+      if (visionRef.current) {
+        visionRef.current.stop().catch(console.error)
+      }
+    }
   }, [])
 
   const handleStart = async () => {
     setLoading(true)
     setError(null)
     try {
-      await axios.post('/api/vision/start')
-      await checkStatus()
+      if (visionRef.current) {
+        await visionRef.current.start()
+        setIsRunning(true)
+      }
     } catch (err) {
       console.error('Error starting vision:', err)
-      setError(err instanceof Error ? err.message : 'Failed to start vision service')
+      
+      // Provide helpful error messages
+      let errorMessage = 'Failed to start vision service'
+      if (err instanceof Error) {
+        errorMessage = err.message
+        
+        // Check for common permission errors
+        if (errorMessage.includes('Permission denied') || 
+            errorMessage.includes('NotAllowedError') ||
+            errorMessage.includes('permission')) {
+          errorMessage = '🚫 Camera permission denied. Please:\n\n' +
+            '1. Click the camera icon in your browser address bar\n' +
+            '2. Select "Allow" for camera access\n' +
+            '3. Refresh the page and try again\n\n' +
+            'Make sure no other app is using your camera.'
+        } else if (errorMessage.includes('NotFoundError') || 
+                   errorMessage.includes('not found')) {
+          errorMessage = '📷 No camera found. Please connect a camera and try again.'
+        } else if (errorMessage.includes('NotReadableError') || 
+                   errorMessage.includes('Could not start')) {
+          errorMessage = '⚠️ Camera is already in use by another application. Close other apps using the camera and try again.'
+        }
+      }
+      
+      setError(errorMessage)
     } finally {
       setLoading(false)
     }
@@ -46,8 +73,10 @@ function App() {
     setLoading(true)
     setError(null)
     try {
-      await axios.post('/api/vision/stop')
-      await checkStatus()
+      if (visionRef.current) {
+        await visionRef.current.stop()
+        setIsRunning(false)
+      }
     } catch (err) {
       console.error('Error stopping vision:', err)
       setError(err instanceof Error ? err.message : 'Failed to stop vision service')
@@ -66,9 +95,9 @@ function App() {
       <main className="app-main">
         <div className="status-card">
           <h2>Vision Service Status</h2>
-          <div className={`status-indicator ${status.running ? 'running' : 'stopped'}`}>
+          <div className={`status-indicator ${isRunning ? 'running' : 'stopped'}`}>
             <span className="status-dot"></span>
-            <span>{status.running ? 'Running' : 'Stopped'}</span>
+            <span>{isRunning ? 'Running' : 'Stopped'}</span>
           </div>
           
           {error && (
@@ -80,14 +109,14 @@ function App() {
           <div className="controls">
             <button
               onClick={handleStart}
-              disabled={loading || status.running}
+              disabled={loading || isRunning}
               className="btn btn-start"
             >
               {loading ? 'Starting...' : 'Start Vision'}
             </button>
             <button
               onClick={handleStop}
-              disabled={loading || !status.running}
+              disabled={loading || !isRunning}
               className="btn btn-stop"
             >
               {loading ? 'Stopping...' : 'Stop Vision'}
@@ -99,11 +128,35 @@ function App() {
           <h3>How to use</h3>
           <ol>
             <li>Click "Start Vision" to begin camera processing</li>
+            <li>Grant camera permissions when prompted by your browser</li>
             <li>The service will read any visible text from your camera</li>
-            <li>Check the server console for recognized text output</li>
+            <li>Results will appear below in real-time</li>
             <li>Click "Stop Vision" when finished</li>
           </ol>
+          
+          <div className="info-tip">
+            <strong>💡 Tip:</strong> If you see "Permission denied", check your browser's camera permissions:
+            <ul>
+              <li><strong>Chrome/Edge:</strong> Click the camera icon in the address bar</li>
+              <li><strong>Firefox:</strong> Click the camera icon next to the URL</li>
+              <li><strong>Safari:</strong> Go to Settings → Websites → Camera</li>
+            </ul>
+          </div>
         </div>
+
+        {results.length > 0 && (
+          <div className="results-card">
+            <h3>Detected Text</h3>
+            <div className="results-list">
+              {results.map((result, index) => (
+                <div key={index} className="result-item">
+                  <span className="result-timestamp">{new Date().toLocaleTimeString()}</span>
+                  <p>{result}</p>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
       </main>
     </div>
   )
