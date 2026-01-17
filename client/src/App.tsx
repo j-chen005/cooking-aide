@@ -7,14 +7,23 @@ function App() {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [results, setResults] = useState<string[]>([])
+  const [videoFile, setVideoFile] = useState<File | null>(null)
   const visionRef = useRef<RealtimeVision | null>(null)
 
-  // Initialize vision instance
+  // Initialize vision instance when video file is selected
   useEffect(() => {
+    if (!videoFile) return
+
+    // Cleanup previous instance
+    if (visionRef.current) {
+      visionRef.current.stop().catch(console.error)
+    }
+
     visionRef.current = new RealtimeVision({
       apiUrl: 'https://cluster1.overshoot.ai/api/v0.2',
       apiKey: import.meta.env.VITE_OVERSHOOT_API_KEY || 'your-api-key',
       prompt: 'Describe what you see',
+      source: { type: 'video', file: videoFile },
       onResult: (result) => {
         console.log('Vision result:', result.result)
         setResults(prev => [result.result, ...prev].slice(0, 10)) // Keep last 10 results
@@ -27,7 +36,17 @@ function App() {
         visionRef.current.stop().catch(console.error)
       }
     }
-  }, [])
+  }, [videoFile])
+
+  const handleFileSelect = (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0]
+    if (file) {
+      setVideoFile(file)
+      setError(null)
+      setResults([])
+      setIsRunning(false)
+    }
+  }
 
   const handleStart = async () => {
     setLoading(true)
@@ -94,6 +113,27 @@ function App() {
       
       <main className="app-main">
         <div className="status-card">
+          <h2>Select Video File</h2>
+          <div style={{ marginBottom: '20px' }}>
+            <input
+              type="file"
+              accept="video/*"
+              onChange={handleFileSelect}
+              style={{
+                padding: '10px',
+                border: '2px solid #ddd',
+                borderRadius: '8px',
+                width: '100%',
+                cursor: 'pointer'
+              }}
+            />
+            {videoFile && (
+              <p style={{ marginTop: '10px', color: '#666', fontSize: '14px' }}>
+                📹 Selected: {videoFile.name}
+              </p>
+            )}
+          </div>
+
           <h2>Vision Service Status</h2>
           <div className={`status-indicator ${isRunning ? 'running' : 'stopped'}`}>
             <span className="status-dot"></span>
@@ -109,7 +149,7 @@ function App() {
           <div className="controls">
             <button
               onClick={handleStart}
-              disabled={loading || isRunning}
+              disabled={loading || isRunning || !videoFile}
               className="btn btn-start"
             >
               {loading ? 'Starting...' : 'Start Vision'}
