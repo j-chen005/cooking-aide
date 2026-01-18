@@ -253,4 +253,106 @@ Rules:
   }
 });
 
+// Update checklist completion status based on new video descriptions
+router.post('/checklist-update', async (req, res) => {
+  try {
+    const { currentChecklist, videoDescriptions, mode = 'cooking' } = req.body;
+
+    if (!currentChecklist || !Array.isArray(currentChecklist) || currentChecklist.length === 0) {
+      return res.status(400).json({ error: 'Current checklist is required' });
+    }
+
+    if (!videoDescriptions || !Array.isArray(videoDescriptions) || videoDescriptions.length === 0) {
+      return res.status(400).json({ error: 'Video descriptions are required' });
+    }
+
+    // Format the current checklist for the prompt
+    const checklistText = currentChecklist.map((item: ChecklistItem, index: number) => 
+      `${index + 1}. [${item.completed ? 'COMPLETED' : 'NOT COMPLETED'}] ${item.text}`
+    ).join('\n');
+
+    const combinedDescription = videoDescriptions.join('\n\n');
+
+    const systemPrompt = mode === 'cooking'
+      ? `You are a cooking progress tracker. You will be given a checklist of cooking steps and recent video descriptions of what's happening in the kitchen.
+
+Your job is to determine which steps have been completed based on what you observe in the video descriptions.
+
+IMPORTANT RULES:
+1. You MUST respond with ONLY a JSON array of item IDs that should now be marked as completed
+2. ONLY include IDs for items that the video shows have been done
+3. If an item was already marked COMPLETED, do NOT include it (we only need newly completed items)
+4. If no new items are completed, return an empty array: []
+5. Be conservative - only mark as complete if you're confident the step was done
+
+Example response: ["2", "3"] or []`
+      : `You are a math problem progress tracker. You will be given a checklist of problem-solving steps and recent video descriptions of the student's work.
+
+Your job is to determine which steps have been completed based on what you observe in the video descriptions.
+
+IMPORTANT RULES:
+1. You MUST respond with ONLY a JSON array of item IDs that should now be marked as completed
+2. ONLY include IDs for items that the video shows have been done
+3. If an item was already marked COMPLETED, do NOT include it (we only need newly completed items)
+4. If no new items are completed, return an empty array: []
+5. Be conservative - only mark as complete if you're confident the step was done
+
+Example response: ["2", "3"] or []`;
+
+    const userMessage = `Current checklist:
+${checklistText}
+
+Recent video observations:
+${combinedDescription}
+
+Which item IDs (if any) should now be marked as completed based on what you see?`;
+
+    // Get OpenAI client and call API
+    const client = getOpenAIClient();
+    const completion = await client.chat.completions.create({
+      model: 'gpt-4o-mini',
+      messages: [
+        { role: 'system', content: systemPrompt },
+        { role: 'user', content: userMessage }
+      ],
+      max_tokens: 200,
+      temperature: 0.3,
+    });
+
+    const responseText = completion.choices[0]?.message?.content || '[]';
+    
+    // Parse the JSON response
+    let completedIds: string[];
+    try {
+      // Try to extract JSON array from the response
+      const jsonMatch = responseText.match(/\[[\s\S]*?\]/);
+      if (!jsonMatch) {
+        completedIds = [];
+      } else {
+        completedIds = JSON.parse(jsonMatch[0]);
+        // Ensure it's an array of strings
+        if (!Array.isArray(completedIds)) {
+          completedIds = [];
+        }
+        completedIds = completedIds.map(id => String(id));
+      }
+    } catch (parseError) {
+      console.error('Failed to parse checklist update response:', responseText);
+      completedIds = [];
+    }
+
+    res.json({
+      completedIds,
+      timestamp: new Date().toISOString()
+    });
+
+  } catch (error) {
+    console.error('Checklist Update API Error:', error instanceof Error ? error.message : error);
+    res.status(500).json({ 
+      error: 'Failed to update checklist',
+      details: error instanceof Error ? error.message : 'Unknown error'
+    });
+  }
+});
+
 export default router;

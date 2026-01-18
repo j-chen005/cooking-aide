@@ -44,6 +44,7 @@ function App() {
   const lastAdviceCallTime = useRef<number>(0)
   const adviceTimeoutRef = useRef<number | null>(null)
   const checklistTimeoutRef = useRef<number | null>(null)
+  const checklistPollIntervalRef = useRef<number | null>(null)
   const collectedDescriptions = useRef<string[]>([])
 
   // Function to get the prompt based on the current mode
@@ -156,6 +157,75 @@ function App() {
     }
   }
 
+  // Function to poll for checklist updates every 5 seconds
+  const pollChecklistUpdate = async () => {
+    // Don't poll if there's no checklist or no descriptions
+    if (!checklistData || collectedDescriptions.current.length === 0) return
+
+    try {
+      const apiUrl = import.meta.env.VITE_API_URL || 'http://localhost:3001'
+      const response = await fetch(`${apiUrl}/api/chatgpt/checklist-update`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          currentChecklist: checklistData.checklist,
+          videoDescriptions: collectedDescriptions.current,
+          mode: mode
+        }),
+      })
+
+      if (!response.ok) {
+        console.error('Checklist update failed:', response.statusText)
+        return
+      }
+
+      const data: { completedIds: string[], timestamp: string } = await response.json()
+      
+      // Update checklist items that should now be marked as completed
+      // Only mark items as completed (never unmark), preserving original text
+      if (data.completedIds && data.completedIds.length > 0) {
+        setChecklistData(prev => {
+          if (!prev) return prev
+          return {
+            ...prev,
+            checklist: prev.checklist.map(item => ({
+              ...item,
+              // Keep completed if already completed, or mark as completed if in the new list
+              completed: item.completed || data.completedIds.includes(item.id)
+            }))
+          }
+        })
+      }
+    } catch (err) {
+      console.error('Failed to poll checklist update:', err)
+    }
+  }
+
+  // Start/stop polling when checklist is available and running
+  useEffect(() => {
+    if (isRunning && checklistData) {
+      // Start polling every 5 seconds
+      checklistPollIntervalRef.current = setInterval(() => {
+        pollChecklistUpdate()
+      }, 5000)
+    } else {
+      // Stop polling
+      if (checklistPollIntervalRef.current) {
+        clearInterval(checklistPollIntervalRef.current)
+        checklistPollIntervalRef.current = null
+      }
+    }
+
+    return () => {
+      if (checklistPollIntervalRef.current) {
+        clearInterval(checklistPollIntervalRef.current)
+        checklistPollIntervalRef.current = null
+      }
+    }
+  }, [isRunning, checklistData, mode])
+
   // Function to toggle checklist item completion
   const toggleChecklistItem = (itemId: string) => {
     if (!checklistData) return
@@ -261,6 +331,11 @@ function App() {
       clearTimeout(checklistTimeoutRef.current)
       checklistTimeoutRef.current = null
     }
+    // Clear checklist poll interval
+    if (checklistPollIntervalRef.current) {
+      clearInterval(checklistPollIntervalRef.current)
+      checklistPollIntervalRef.current = null
+    }
     setMode(newMode)
     setResults([])
     setChatAdvice([])
@@ -289,6 +364,11 @@ function App() {
       clearTimeout(checklistTimeoutRef.current)
       checklistTimeoutRef.current = null
     }
+    // Clear checklist poll interval
+    if (checklistPollIntervalRef.current) {
+      clearInterval(checklistPollIntervalRef.current)
+      checklistPollIntervalRef.current = null
+    }
     setActiveTab(tab)
     setResults([])
     setChatAdvice([])
@@ -311,6 +391,9 @@ function App() {
       if (checklistTimeoutRef.current) {
         clearTimeout(checklistTimeoutRef.current)
       }
+      if (checklistPollIntervalRef.current) {
+        clearInterval(checklistPollIntervalRef.current)
+      }
     }
   }, [])
 
@@ -324,6 +407,11 @@ function App() {
       if (checklistTimeoutRef.current) {
         clearTimeout(checklistTimeoutRef.current)
         checklistTimeoutRef.current = null
+      }
+      // Clear checklist poll interval
+      if (checklistPollIntervalRef.current) {
+        clearInterval(checklistPollIntervalRef.current)
+        checklistPollIntervalRef.current = null
       }
       
       const url = URL.createObjectURL(file)
