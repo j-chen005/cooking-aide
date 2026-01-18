@@ -4,13 +4,14 @@ A real-time vision application using the Overshoot SDK to read visible text from
 
 ## Overview
 
-This project uses the Overshoot RealtimeVision SDK to process camera input and extract visible text in real-time. Perfect for cooking assistance where you need to read recipe instructions, ingredient labels, or other text from your camera feed.
+This project uses the Overshoot RealtimeVision SDK to process video input and analyze what's happening in real-time. Combined with ChatGPT, it provides live cooking advice and feedback based on what the vision AI sees. Perfect for cooking assistance where you need real-time guidance, tips, and safety reminders while preparing food.
 
 ## Tech Stack
 
 - **Backend**: Node.js, Express, TypeScript
 - **Frontend**: React, TypeScript, Vite
 - **Vision SDK**: Overshoot SDK
+- **AI**: OpenAI GPT-4 for real-time cooking advice
 
 ## Project Structure
 
@@ -71,20 +72,48 @@ cd client && npm install && cd ..
 
 ## Configuration
 
+### Client Configuration
+
 1. Get your API key from [Overshoot Platform](https://overshoot.ai)
 
 2. Create a `.env` file in the `client/` directory:
 ```bash
 cd client
-echo "VITE_OVERSHOOT_API_KEY=your-actual-api-key" > .env
+cat > .env << EOF
+VITE_OVERSHOOT_API_KEY=your-actual-api-key
+VITE_API_URL=http://localhost:3001
+EOF
 ```
 
-3. Update `client/.env` with your API key:
+Or manually create `client/.env`:
 ```
 VITE_OVERSHOOT_API_KEY=your-actual-api-key
+VITE_API_URL=http://localhost:3001
 ```
 
-**Note:** The Overshoot SDK runs in the browser (client-side) to access your camera, so the API key is configured in the client directory.
+**Note:** 
+- The Overshoot SDK runs in the browser (client-side) to access your camera
+- `VITE_API_URL` should point to your backend server (defaults to `http://localhost:3001` if not set)
+- In production, set `VITE_API_URL` to your deployed backend URL
+
+### Server Configuration
+
+1. Get your OpenAI API key from [OpenAI Platform](https://platform.openai.com/api-keys)
+
+2. Create a `.env` file in the `server/` directory:
+```bash
+cd server
+cat > .env << EOF
+PORT=3001
+OPENAI_API_KEY=your-openai-api-key
+EOF
+```
+
+Or manually create `server/.env`:
+```
+PORT=3001
+OPENAI_API_KEY=your-openai-api-key
+```
 
 ## Development
 
@@ -139,15 +168,24 @@ This will start the compiled backend server. Make sure to build both projects fi
 
 1. Start the development servers: `npm run dev`
 2. Open http://localhost:3000 in your browser
-3. Grant camera permissions when prompted
-4. Click "Start Vision" to begin camera processing
-5. The service will read any visible text from your camera
-6. Results will appear in real-time on the page
-7. Click "Stop Vision" when finished
+3. Select a cooking video file to analyze
+4. Click "Start Vision" to begin video processing
+5. The vision AI will analyze what's happening in the video
+6. ChatGPT will provide real-time cooking advice and feedback based on the analysis
+7. View AI cooking advice and vision detection results in separate panels
+8. Click "Stop Vision" when finished
+
+**Features:**
+- 🤖 **AI Cooking Advice**: Get real-time tips, warnings, and suggestions from ChatGPT
+- 👁️ **Vision Detection**: See what the vision AI is observing in your cooking video
+- 💡 **Context-Aware**: ChatGPT maintains conversation history for contextual advice
 
 ## API Endpoints
 
 - `GET /api/health` - Health check endpoint
+- `POST /api/chatgpt/advice` - Get cooking advice from ChatGPT based on vision results
+  - Request body: `{ visionResult: string, sessionId?: string }`
+  - Response: `{ advice: string, timestamp: string }`
 
 **Note:** The vision processing runs entirely in the browser using the Overshoot SDK, so server-side vision endpoints are not required.
 
