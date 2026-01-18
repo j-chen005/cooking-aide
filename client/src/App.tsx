@@ -167,7 +167,6 @@ function App() {
                 controls
                 style={{
                   width: '100%',
-                  maxWidth: '600px',
                   borderRadius: '8px',
                   backgroundColor: '#000'
                 }}
@@ -205,19 +204,23 @@ function App() {
           </div>
         </div>
 
-        {results.length > 0 && (
-          <div className="results-card">
-            <h3>Detected Text</h3>
-            <div className="results-list">
-              {results.map((result, index) => (
+        <div className="results-card">
+          <h3>Detected Text</h3>
+          <div className="results-list">
+            {results.length > 0 ? (
+              results.map((result, index) => (
                 <div key={index} className="result-item">
                   <span className="result-timestamp">{new Date().toLocaleTimeString()}</span>
                   <p>{result}</p>
                 </div>
-              ))}
-            </div>
+              ))
+            ) : (
+              <div className="results-empty">
+                No detected text yet. Start the vision service to see results.
+              </div>
+            )}
           </div>
-        )}
+        </div>
       </main>
     </div>
   )
