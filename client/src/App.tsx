@@ -19,15 +19,49 @@ function App() {
   const [videoUrl, setVideoUrl] = useState<string | null>(null)
   const [chatAdvice, setChatAdvice] = useState<AdviceItem[]>([])
   const [isGettingAdvice, setIsGettingAdvice] = useState(false)
+  const [isRateLimited, setIsRateLimited] = useState(false)
   const [recipeDescription, setRecipeDescription] = useState<string>('')
   const visionRef = useRef<RealtimeVision | null>(null)
   const videoRef = useRef<HTMLVideoElement | null>(null)
   const cameraVideoRef = useRef<HTMLVideoElement | null>(null)
   const sessionId = useRef<string>(`session-${Date.now()}`)
+  const lastAdviceCallTime = useRef<number>(0)
+  const adviceTimeoutRef = useRef<number | null>(null)
 
-  // Function to get ChatGPT advice
-  const getChatAdvice = async (visionResult: string) => {
+  // Function to get ChatGPT advice with debouncing
+  const getChatAdvice = (visionResult: string) => {
+    // Clear any pending timeout
+    if (adviceTimeoutRef.current) {
+      clearTimeout(adviceTimeoutRef.current)
+    }
+
+    // Check if we're within the rate limit window (8 seconds to match server)
+    const now = Date.now()
+    const timeSinceLastCall = now - lastAdviceCallTime.current
+    
+    if (timeSinceLastCall < 8000) {
+      // Schedule the call for after the rate limit window
+      const delay = 8000 - timeSinceLastCall
+      setIsRateLimited(true)
+      
+      adviceTimeoutRef.current = setTimeout(() => {
+        makeAdviceRequest(visionResult)
+        setIsRateLimited(false)
+      }, delay)
+      return
+    }
+
+    // Update timestamp BEFORE making the request to prevent race conditions
+    lastAdviceCallTime.current = Date.now()
+    
+    // Otherwise call immediately
+    makeAdviceRequest(visionResult)
+  }
+
+  const makeAdviceRequest = async (visionResult: string) => {
     setIsGettingAdvice(true)
+    setIsRateLimited(false)
+    
     try {
       const apiUrl = import.meta.env.VITE_API_URL || 'http://localhost:3001'
       const response = await fetch(`${apiUrl}/api/chatgpt/advice`, {
@@ -43,18 +77,19 @@ function App() {
       })
 
       if (response.status === 429) {
-        // Rate limited, skip silently
+        setIsRateLimited(true)
         return
       }
 
       if (!response.ok) {
-        throw new Error('Failed to get advice from ChatGPT')
+        return
       }
 
       const data = await response.json()
       setChatAdvice(prev => [data, ...prev].slice(0, 10))
+      setIsRateLimited(false)
     } catch (err) {
-      // Silently fail
+      // Silently fail for network errors
     } finally {
       setIsGettingAdvice(false)
     }
@@ -120,12 +155,29 @@ function App() {
     if (isRunning) {
       handleStop()
     }
+    // Clear pending advice timeout
+    if (adviceTimeoutRef.current) {
+      clearTimeout(adviceTimeoutRef.current)
+      adviceTimeoutRef.current = null
+    }
     setActiveTab(tab)
     setResults([])
     setChatAdvice([])
     setError(null)
+    setIsRateLimited(false)
+    setIsGettingAdvice(false)
+    lastAdviceCallTime.current = 0
     sessionId.current = `session-${Date.now()}`
   }
+
+  // Cleanup timeout on unmount
+  useEffect(() => {
+    return () => {
+      if (adviceTimeoutRef.current) {
+        clearTimeout(adviceTimeoutRef.current)
+      }
+    }
+  }, [])
 
   const handleFileSelect = (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0]
@@ -337,6 +389,17 @@ function App() {
                 color: '#0369a1'
               }}>
                 💭 Getting advice from ChatGPT...
+              </div>
+            )}
+            {isRateLimited && !isGettingAdvice && (
+              <div style={{ 
+                padding: '10px', 
+                backgroundColor: '#fef3c7', 
+                borderRadius: '8px',
+                marginBottom: '10px',
+                color: '#92400e'
+              }}>
+                ⏱️ Rate limited - waiting to avoid too many requests...
               </div>
             )}
             <div className="results-list">

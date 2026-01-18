@@ -32,10 +32,11 @@ router.post('/advice', async (req, res) => {
       return res.status(400).json({ error: 'Vision result is required' });
     }
 
-    // Rate limit: Only call API once every 5 seconds
+    // Rate limit: Only call API once every 8 seconds to avoid OpenAI rate limits
     const now = Date.now();
     const lastCall = lastCallTime.get(sessionId) || 0;
-    if (now - lastCall < 5000) {
+    
+    if (now - lastCall < 8000) {
       return res.status(429).json({ 
         error: 'Rate limited',
         details: 'Please wait before requesting more advice'
@@ -78,10 +79,9 @@ Only respond if there's something meaningful to say. If the vision result shows 
     // Get OpenAI client and call API
     const client = getOpenAIClient();
     const completion = await client.chat.completions.create({
-      model: 'gpt-4o-mini',
+      model: 'gpt-5-nano',
       messages: history,
-      temperature: 0.7,
-      max_tokens: 150,
+      max_completion_tokens: 1000,
     });
 
     const advice = completion.choices[0]?.message?.content || 'No advice generated';
@@ -98,6 +98,7 @@ Only respond if there's something meaningful to say. If the vision result shows 
     });
 
   } catch (error) {
+    console.error('ChatGPT API Error:', error instanceof Error ? error.message : error);
     res.status(500).json({ 
       error: 'Failed to get advice from ChatGPT',
       details: error instanceof Error ? error.message : 'Unknown error'
