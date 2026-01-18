@@ -22,7 +22,7 @@ function App() {
     visionRef.current = new RealtimeVision({
       apiUrl: 'https://cluster1.overshoot.ai/api/v0.2',
       apiKey: import.meta.env.VITE_OVERSHOOT_API_KEY || 'your-api-key',
-      prompt: 'Describe what you see',
+      prompt: 'You are a master chef who knows everything about any dish. Your job is to be an assitant to the chef cooking and give advice and instructions to the chef. If you have no suggestions or advice, just give reaffirmations that they are doing great. You can give suggestions like: You’re stirring well; slowing it down here will deepen flavor., Great sear—waiting 15 more seconds will improve the crust. In about 30 seconds, you’ll want to lower the heat.',
       source: { type: 'video', file: videoFile },
       onResult: (result) => {
         console.log('Vision result:', result.result)
