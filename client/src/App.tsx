@@ -248,12 +248,13 @@ function App() {
         return
       }
 
-      const data: { completedIds: string[], timestamp: string } = await response.json()
+      const data: { completedIds: string[], newItems: ChecklistItem[], timestamp: string } = await response.json()
       
-      // Update checklist items that should now be marked as completed
-      // Only mark items as completed (never unmark), preserving original text
-      if (data.completedIds && data.completedIds.length > 0) {
-        // Check for out-of-order completions before updating
+      const hasCompletedItems = data.completedIds && data.completedIds.length > 0
+      const hasNewItems = data.newItems && data.newItems.length > 0
+      
+      // Check for out-of-order completions before updating
+      if (hasCompletedItems) {
         for (const completingId of data.completedIds) {
           const item = checklistData.checklist.find(i => i.id === completingId)
           if (item && !item.completed) {
@@ -265,16 +266,28 @@ function App() {
             }
           }
         }
-        
+      }
+      
+      // Update the checklist with completed items and new items
+      if (hasCompletedItems || hasNewItems) {
         setChecklistData(prev => {
           if (!prev) return prev
+          
+          // Update completed status for existing items
+          let updatedChecklist = prev.checklist.map(item => ({
+            ...item,
+            // Keep completed if already completed, or mark as completed if in the new list
+            completed: item.completed || (data.completedIds?.includes(item.id) ?? false)
+          }))
+          
+          // Add new items to the checklist
+          if (hasNewItems) {
+            updatedChecklist = [...updatedChecklist, ...data.newItems]
+          }
+          
           return {
             ...prev,
-            checklist: prev.checklist.map(item => ({
-              ...item,
-              // Keep completed if already completed, or mark as completed if in the new list
-              completed: item.completed || data.completedIds.includes(item.id)
-            }))
+            checklist: updatedChecklist
           }
         })
       }

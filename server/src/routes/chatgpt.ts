@@ -303,36 +303,73 @@ router.post('/checklist-update', async (req, res) => {
 
     // Format the current checklist for the prompt
     const checklistText = currentChecklist.map((item: ChecklistItem, index: number) => 
-      `${index + 1}. [${item.completed ? 'COMPLETED' : 'NOT COMPLETED'}] ${item.text}`
+      `${index + 1}. [ID: ${item.id}] [${item.completed ? 'COMPLETED' : 'NOT COMPLETED'}] ${item.text}`
     ).join('\n');
+
+    // Find the highest existing ID to generate new unique IDs
+    const maxId = Math.max(...currentChecklist.map((item: ChecklistItem) => parseInt(item.id) || 0));
 
     const combinedDescription = videoDescriptions.join('\n\n');
 
     const systemPrompt = mode === 'cooking'
       ? `You are a cooking progress tracker. You will be given a checklist of cooking steps and recent video descriptions of what's happening in the kitchen.
 
-Your job is to determine which steps have been completed based on what you observe in the video descriptions.
+Your job is to:
+1. Determine which existing steps have been completed
+2. Identify any IMPORTANT cooking steps that are missing from the checklist but should be there
 
-IMPORTANT RULES:
-1. You MUST respond with ONLY a JSON array of item IDs that should now be marked as completed
-2. ONLY include IDs for items that the video shows have been done
-3. If an item was already marked COMPLETED, do NOT include it (we only need newly completed items)
-4. If no new items are completed, return an empty array: []
-5. Be conservative - only mark as complete if you're confident the step was done
+IMPORTANT: You MUST respond with ONLY a valid JSON object in this exact format:
+{
+  "completedIds": ["2", "3"],
+  "newItems": [
+    { "text": "New step description", "completed": false }
+  ]
+}
 
-Example response: ["2", "3"] or []`
+Rules for completedIds:
+- Array of IDs for existing items that should now be marked completed (only items NOT already completed)
+- Be conservative - only mark as complete if you're confident the step was done
+
+Rules for newItems - VERY STRICT:
+- CAREFULLY READ the existing checklist above - DO NOT add anything that's already there or similar
+- ONLY add standard cooking steps that a recipe would typically include
+- Examples of GOOD new items: "Preheat oven to 350°F", "Season with salt and pepper", "Let rest for 5 minutes"
+- Do NOT add observations or descriptions of random actions
+- Do NOT add items that describe what someone is currently doing
+- New items should be actionable future tasks OR important missed steps
+- If an existing item covers the same action, DO NOT add a duplicate
+- Set completed to false for future steps, true only if clearly already done
+- If no important NEW steps are missing, return empty array: []
+- When in doubt, DON'T add it - prefer empty array`
       : `You are a math problem progress tracker. You will be given a checklist of problem-solving steps and recent video descriptions of the student's work.
 
-Your job is to determine which steps have been completed based on what you observe in the video descriptions.
+Your job is to:
+1. Determine which existing steps have been completed
+2. Identify any IMPORTANT problem-solving steps that are missing from the checklist but should be there
 
-IMPORTANT RULES:
-1. You MUST respond with ONLY a JSON array of item IDs that should now be marked as completed
-2. ONLY include IDs for items that the video shows have been done
-3. If an item was already marked COMPLETED, do NOT include it (we only need newly completed items)
-4. If no new items are completed, return an empty array: []
-5. Be conservative - only mark as complete if you're confident the step was done
+IMPORTANT: You MUST respond with ONLY a valid JSON object in this exact format:
+{
+  "completedIds": ["2", "3"],
+  "newItems": [
+    { "text": "New step description", "completed": false }
+  ]
+}
 
-Example response: ["2", "3"] or []`;
+Rules for completedIds:
+- Array of IDs for existing items that should now be marked completed (only items NOT already completed)
+- Be conservative - only mark as complete if you're confident the step was done
+
+Rules for newItems - VERY STRICT:
+- CAREFULLY READ the existing checklist above - DO NOT add anything that's already there or similar
+- ONLY add standard math problem-solving steps that would typically be needed
+- Examples of GOOD new items: "Check your answer", "Simplify the fraction", "Convert units"
+- Do NOT add observations or descriptions of what the student is doing
+- Do NOT add items that describe current actions
+- New items should be actionable future steps OR important missed steps
+- If an existing item covers the same action, DO NOT add a duplicate
+- Set completed to false for future steps, true only if clearly already done
+- If no important NEW steps are missing, return empty array: []
+- When in doubt, DON'T add it - prefer empty array`;
 
     const userMessage = `Current checklist:
 ${checklistText}
@@ -340,7 +377,7 @@ ${checklistText}
 Recent video observations:
 ${combinedDescription}
 
-Which item IDs (if any) should now be marked as completed based on what you see?`;
+What updates should be made?`;
 
     // Get OpenAI client and call API
     const client = getOpenAIClient();
@@ -350,34 +387,67 @@ Which item IDs (if any) should now be marked as completed based on what you see?
         { role: 'system', content: systemPrompt },
         { role: 'user', content: userMessage }
       ],
-      max_tokens: 200,
+      max_tokens: 500,
       temperature: 0.3,
     });
 
-    const responseText = completion.choices[0]?.message?.content || '[]';
+    const responseText = completion.choices[0]?.message?.content || '{}';
     
     // Parse the JSON response
-    let completedIds: string[];
+    let completedIds: string[] = [];
+    let newItems: ChecklistItem[] = [];
+    
     try {
-      // Try to extract JSON array from the response
-      const jsonMatch = responseText.match(/\[[\s\S]*?\]/);
-      if (!jsonMatch) {
-        completedIds = [];
-      } else {
-        completedIds = JSON.parse(jsonMatch[0]);
-        // Ensure it's an array of strings
-        if (!Array.isArray(completedIds)) {
-          completedIds = [];
+      // Try to extract JSON object from the response
+      const jsonMatch = responseText.match(/\{[\s\S]*\}/);
+      if (jsonMatch) {
+        const parsed = JSON.parse(jsonMatch[0]);
+        
+        // Extract completedIds
+        if (Array.isArray(parsed.completedIds)) {
+          completedIds = parsed.completedIds.map((id: any) => String(id));
         }
-        completedIds = completedIds.map(id => String(id));
+        
+        // Extract and format newItems with unique IDs
+        if (Array.isArray(parsed.newItems)) {
+          // Get existing task texts (lowercase for comparison)
+          const existingTexts = currentChecklist.map((item: ChecklistItem) => 
+            item.text.toLowerCase().trim()
+          );
+          
+          // Filter out duplicates and format with unique IDs
+          let idCounter = maxId;
+          newItems = parsed.newItems
+            .filter((item: any) => {
+              if (!item.text) return false;
+              const newText = item.text.toLowerCase().trim();
+              // Check if this text already exists (exact match or very similar)
+              const isDuplicate = existingTexts.some((existing: string) => {
+                // Exact match
+                if (existing === newText) return true;
+                // Check if one contains the other (for similar tasks)
+                if (existing.includes(newText) || newText.includes(existing)) return true;
+                return false;
+              });
+              return !isDuplicate;
+            })
+            .map((item: any) => {
+              idCounter++;
+              return {
+                id: String(idCounter),
+                text: item.text,
+                completed: Boolean(item.completed)
+              };
+            });
+        }
       }
     } catch (parseError) {
       console.error('Failed to parse checklist update response:', responseText);
-      completedIds = [];
     }
 
     res.json({
       completedIds,
+      newItems,
       timestamp: new Date().toISOString()
     });
 
