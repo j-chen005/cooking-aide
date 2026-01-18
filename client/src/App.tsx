@@ -8,7 +8,9 @@ function App() {
   const [error, setError] = useState<string | null>(null)
   const [results, setResults] = useState<string[]>([])
   const [videoFile, setVideoFile] = useState<File | null>(null)
+  const [videoUrl, setVideoUrl] = useState<string | null>(null)
   const visionRef = useRef<RealtimeVision | null>(null)
+  const videoRef = useRef<HTMLVideoElement | null>(null)
 
   // Initialize vision instance when video file is selected
   useEffect(() => {
@@ -35,12 +37,23 @@ function App() {
       if (visionRef.current) {
         visionRef.current.stop().catch(console.error)
       }
+      if (videoUrl) {
+        URL.revokeObjectURL(videoUrl)
+      }
     }
   }, [videoFile])
 
   const handleFileSelect = (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0]
     if (file) {
+      // Clean up previous video URL
+      if (videoUrl) {
+        URL.revokeObjectURL(videoUrl)
+      }
+      
+      // Create new video URL
+      const url = URL.createObjectURL(file)
+      setVideoUrl(url)
       setVideoFile(file)
       setError(null)
       setResults([])
@@ -55,6 +68,12 @@ function App() {
       if (visionRef.current) {
         await visionRef.current.start()
         setIsRunning(true)
+        
+        // Start playing the video
+        if (videoRef.current) {
+          videoRef.current.currentTime = 0 // Start from the beginning
+          await videoRef.current.play()
+        }
       }
     } catch (err) {
       console.error('Error starting vision:', err)
@@ -95,6 +114,11 @@ function App() {
       if (visionRef.current) {
         await visionRef.current.stop()
         setIsRunning(false)
+        
+        // Pause the video
+        if (videoRef.current) {
+          videoRef.current.pause()
+        }
       }
     } catch (err) {
       console.error('Error stopping vision:', err)
@@ -133,6 +157,23 @@ function App() {
               </p>
             )}
           </div>
+
+          {videoUrl && (
+            <div style={{ marginBottom: '20px' }}>
+              <h3>Video Preview</h3>
+              <video
+                ref={videoRef}
+                src={videoUrl}
+                controls
+                style={{
+                  width: '100%',
+                  maxWidth: '600px',
+                  borderRadius: '8px',
+                  backgroundColor: '#000'
+                }}
+              />
+            </div>
+          )}
 
           <h2>Vision Service Status</h2>
           <div className={`status-indicator ${isRunning ? 'running' : 'stopped'}`}>
