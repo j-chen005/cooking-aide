@@ -126,7 +126,7 @@ function App() {
   }
 
   // Function to speak out-of-order warning using OpenAI TTS
-  const speakOutOfOrderWarning = async (stepText: string, skippedSteps: string[]) => {
+  const speakOutOfOrderWarning = async (skippedSteps: string[]) => {
     // Don't play if already playing
     if (isPlayingAudioRef.current) return
     
@@ -135,10 +135,10 @@ function App() {
     try {
       const apiUrl = import.meta.env.VITE_API_URL || 'http://localhost:3001'
       const skippedList = skippedSteps.length === 1 
-        ? `step: ${skippedSteps[0]}`
-        : `steps: ${skippedSteps.slice(0, -1).join(', ')} and ${skippedSteps[skippedSteps.length - 1]}`
+        ? skippedSteps[0]
+        : `${skippedSteps.slice(0, -1).join(', ')} and ${skippedSteps[skippedSteps.length - 1]}`
       
-      const message = `Warning! You completed "${stepText}" out of order. You skipped the following ${skippedList}. Please make sure you haven't missed anything important.`
+      const message = `Hey, you missed: ${skippedList}. Would you like to do ${skippedSteps.length === 1 ? 'it' : 'them'}?`
       
       const response = await fetch(`${apiUrl}/api/chatgpt/speak`, {
         method: 'POST',
@@ -260,7 +260,7 @@ function App() {
             const { isOutOfOrder, skippedSteps } = checkOutOfOrder(checklistData.checklist, completingId)
             if (isOutOfOrder) {
               // Speak the warning (will only play if not already playing)
-              speakOutOfOrderWarning(item.text, skippedSteps)
+              speakOutOfOrderWarning(skippedSteps)
               break // Only warn about the first out-of-order item to avoid overwhelming
             }
           }
@@ -317,7 +317,7 @@ function App() {
     if (!item.completed) {
       const { isOutOfOrder, skippedSteps } = checkOutOfOrder(checklistData.checklist, itemId)
       if (isOutOfOrder) {
-        speakOutOfOrderWarning(item.text, skippedSteps)
+        speakOutOfOrderWarning(skippedSteps)
       }
     }
     
