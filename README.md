@@ -1,5 +1,7 @@
 # InstructorAI
 
+**Real-time AI guidance for cooking and learning**
+
 A real-time vision AI assistant using the Overshoot SDK for vision processing and OpenAI GPT for intelligent guidance. Supports both cooking assistance and math tutoring modes with video file or live camera input.
 
 ## Overview
