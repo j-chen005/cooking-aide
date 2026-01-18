@@ -26,7 +26,7 @@ const lastCallTime = new Map<string, number>();
 
 router.post('/advice', async (req, res) => {
   try {
-    const { visionResult, sessionId = 'default' } = req.body;
+    const { visionResult, sessionId = 'default', recipeContext = '' } = req.body;
 
     if (!visionResult) {
       return res.status(400).json({ error: 'Vision result is required' });

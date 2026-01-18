@@ -16,6 +16,7 @@ function App() {
   const [videoUrl, setVideoUrl] = useState<string | null>(null)
   const [chatAdvice, setChatAdvice] = useState<AdviceItem[]>([])
   const [isGettingAdvice, setIsGettingAdvice] = useState(false)
+  const [recipeDescription, setRecipeDescription] = useState<string>('')
   const visionRef = useRef<RealtimeVision | null>(null)
   const videoRef = useRef<HTMLVideoElement | null>(null)
   const sessionId = useRef<string>(`session-${Date.now()}`)
@@ -32,7 +33,8 @@ function App() {
         },
         body: JSON.stringify({
           visionResult,
-          sessionId: sessionId.current
+          sessionId: sessionId.current,
+          recipeContext: recipeDescription
         }),
       })
 
@@ -64,7 +66,7 @@ function App() {
     visionRef.current = new RealtimeVision({
       apiUrl: 'https://cluster1.overshoot.ai/api/v0.2',
       apiKey: import.meta.env.VITE_OVERSHOOT_API_KEY || 'your-api-key',
-      prompt: "You are a master chef watching another amateur chef cook. Describe what you see, including the ingredients and the steps of the recipe. Focus more on the chef's actions over the background.",
+      prompt: "You are a master chef watching another chef cook. Describe what you see, including the ingredients and the steps of the recipe. Focus more on the chef's actions over the background.",
       source: { type: 'video', file: videoFile },
       onResult: (result) => {
         setResults(prev => [result.result, ...prev].slice(0, 10))
@@ -151,8 +153,17 @@ function App() {
       </header>
       
       <main className="app-main">
-        <div className="status-card">
-          <h2>Select Video File</h2>
+        <input
+          type="text"
+          value={recipeDescription}
+          onChange={(e) => setRecipeDescription(e.target.value)}
+          placeholder="What are you making?"
+          className="recipe-input"
+        />
+
+        <div className="cards-row">
+          <div className="status-card">
+            <h2>Select Video File</h2>
           <div style={{ marginBottom: '20px' }}>
             <input
               type="file"
@@ -271,6 +282,7 @@ function App() {
               </div>
             )}
           </div>
+        </div>
         </div>
       </main>
     </div>
