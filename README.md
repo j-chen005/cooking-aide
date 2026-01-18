@@ -168,10 +168,6 @@ This will start the compiled backend server. Make sure to build both projects fi
 - `npm run build:client` - Build client for production
 - `npm run preview` - Preview production build
 
-## License
-
-MIT License - see LICENSE file for details
-
 ## Contributing
 
 Contributions are welcome! Please feel free to submit a Pull Request.
