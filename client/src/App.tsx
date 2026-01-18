@@ -525,14 +525,14 @@ function App() {
                 disabled={loading || isRunning || (activeTab === 'video' && !videoFile)}
                 className="btn btn-start"
               >
-                {loading ? 'Starting...' : 'Start Vision'}
+                {loading ? 'Starting...' : 'Start'}
               </button>
               <button
                 onClick={handleStop}
                 disabled={loading || !isRunning}
                 className="btn btn-stop"
               >
-                {loading ? 'Stopping...' : 'Stop Vision'}
+                {loading ? 'Stopping...' : 'Stop'}
               </button>
             </div>
           </div>
