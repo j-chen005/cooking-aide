@@ -7,6 +7,18 @@ interface AdviceItem {
   timestamp: string
 }
 
+interface ChecklistItem {
+  id: string
+  text: string
+  completed: boolean
+}
+
+interface ChecklistData {
+  title: string
+  checklist: ChecklistItem[]
+  timestamp: string
+}
+
 type TabType = 'video' | 'camera'
 type ModeType = 'cooking' | 'school'
 
@@ -23,12 +35,18 @@ function App() {
   const [isGettingAdvice, setIsGettingAdvice] = useState(false)
   const [isRateLimited, setIsRateLimited] = useState(false)
   const [recipeDescription, setRecipeDescription] = useState<string>('')
+  const [checklistData, setChecklistData] = useState<ChecklistData | null>(null)
+  const [isGeneratingChecklist, setIsGeneratingChecklist] = useState(false)
   const visionRef = useRef<RealtimeVision | null>(null)
   const videoRef = useRef<HTMLVideoElement | null>(null)
   const cameraVideoRef = useRef<HTMLVideoElement | null>(null)
   const sessionId = useRef<string>(`session-${Date.now()}`)
   const lastAdviceCallTime = useRef<number>(0)
   const adviceTimeoutRef = useRef<number | null>(null)
+  const checklistTimeoutRef = useRef<number | null>(null)
+  const checklistPollIntervalRef = useRef<number | null>(null)
+  const collectedDescriptions = useRef<string[]>([])
+  const isPlayingAudioRef = useRef<boolean>(false)
 
   // Function to get the prompt based on the current mode
   const getPromptForMode = () => {
@@ -107,6 +125,226 @@ function App() {
     }
   }
 
+  // Function to speak out-of-order warning using OpenAI TTS
+  const speakOutOfOrderWarning = async (skippedSteps: string[]) => {
+    // Don't play if already playing
+    if (isPlayingAudioRef.current) return
+    
+    isPlayingAudioRef.current = true
+    
+    try {
+      const apiUrl = import.meta.env.VITE_API_URL || 'http://localhost:3001'
+      const skippedList = skippedSteps.length === 1 
+        ? skippedSteps[0]
+        : `${skippedSteps.slice(0, -1).join(', ')} and ${skippedSteps[skippedSteps.length - 1]}`
+      
+      const message = `Hey, you missed: ${skippedList}. Would you like to do ${skippedSteps.length === 1 ? 'it' : 'them'}?`
+      
+      const response = await fetch(`${apiUrl}/api/chatgpt/speak`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ text: message }),
+      })
+
+      if (!response.ok) {
+        console.error('TTS request failed:', response.statusText)
+        return
+      }
+
+      // Get the audio blob and play it
+      const audioBlob = await response.blob()
+      const audioUrl = URL.createObjectURL(audioBlob)
+      const audio = new Audio(audioUrl)
+      
+      audio.onended = () => {
+        URL.revokeObjectURL(audioUrl)
+        isPlayingAudioRef.current = false
+      }
+      
+      audio.onerror = () => {
+        URL.revokeObjectURL(audioUrl)
+        isPlayingAudioRef.current = false
+      }
+      
+      await audio.play()
+    } catch (err) {
+      console.error('Failed to play out-of-order warning:', err)
+      isPlayingAudioRef.current = false
+    }
+  }
+
+  // Function to check if completing a step would be out of order
+  const checkOutOfOrder = (checklist: ChecklistItem[], completingId: string): { isOutOfOrder: boolean, skippedSteps: string[] } => {
+    const completingIndex = checklist.findIndex(item => item.id === completingId)
+    if (completingIndex <= 0) return { isOutOfOrder: false, skippedSteps: [] }
+    
+    // Check if any previous items are not completed
+    const skippedSteps: string[] = []
+    for (let i = 0; i < completingIndex; i++) {
+      if (!checklist[i].completed) {
+        skippedSteps.push(checklist[i].text)
+      }
+    }
+    
+    return { isOutOfOrder: skippedSteps.length > 0, skippedSteps }
+  }
+
+  // Function to generate checklist from accumulated descriptions
+  const generateChecklist = async () => {
+    if (collectedDescriptions.current.length === 0) return
+
+    setIsGeneratingChecklist(true)
+    try {
+      const apiUrl = import.meta.env.VITE_API_URL || 'http://localhost:3001'
+      const response = await fetch(`${apiUrl}/api/chatgpt/checklist`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          videoDescriptions: collectedDescriptions.current,
+          recipeContext: recipeDescription,
+          mode: mode
+        }),
+      })
+
+      if (!response.ok) {
+        console.error('Checklist generation failed:', response.statusText)
+        return
+      }
+
+      const data: ChecklistData = await response.json()
+      setChecklistData(data)
+    } catch (err) {
+      console.error('Failed to generate checklist:', err)
+    } finally {
+      setIsGeneratingChecklist(false)
+    }
+  }
+
+  // Function to poll for checklist updates every 5 seconds
+  const pollChecklistUpdate = async () => {
+    // Don't poll if there's no checklist or no descriptions
+    if (!checklistData || collectedDescriptions.current.length === 0) return
+
+    try {
+      const apiUrl = import.meta.env.VITE_API_URL || 'http://localhost:3001'
+      const response = await fetch(`${apiUrl}/api/chatgpt/checklist-update`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          currentChecklist: checklistData.checklist,
+          videoDescriptions: collectedDescriptions.current,
+          mode: mode
+        }),
+      })
+
+      if (!response.ok) {
+        console.error('Checklist update failed:', response.statusText)
+        return
+      }
+
+      const data: { completedIds: string[], newItems: ChecklistItem[], timestamp: string } = await response.json()
+      
+      const hasCompletedItems = data.completedIds && data.completedIds.length > 0
+      const hasNewItems = data.newItems && data.newItems.length > 0
+      
+      // Check for out-of-order completions before updating
+      if (hasCompletedItems) {
+        for (const completingId of data.completedIds) {
+          const item = checklistData.checklist.find(i => i.id === completingId)
+          if (item && !item.completed) {
+            const { isOutOfOrder, skippedSteps } = checkOutOfOrder(checklistData.checklist, completingId)
+            if (isOutOfOrder) {
+              // Speak the warning (will only play if not already playing)
+              speakOutOfOrderWarning(skippedSteps)
+              break // Only warn about the first out-of-order item to avoid overwhelming
+            }
+          }
+        }
+      }
+      
+      // Update the checklist with completed items and new items
+      if (hasCompletedItems || hasNewItems) {
+        setChecklistData(prev => {
+          if (!prev) return prev
+          
+          // Update completed status for existing items
+          let updatedChecklist = prev.checklist.map(item => ({
+            ...item,
+            // Keep completed if already completed, or mark as completed if in the new list
+            completed: item.completed || (data.completedIds?.includes(item.id) ?? false)
+          }))
+          
+          // Add new items to the checklist
+          if (hasNewItems) {
+            updatedChecklist = [...updatedChecklist, ...data.newItems]
+          }
+          
+          return {
+            ...prev,
+            checklist: updatedChecklist
+          }
+        })
+      }
+    } catch (err) {
+      console.error('Failed to poll checklist update:', err)
+    }
+  }
+
+  // Start/stop polling when checklist is available and running
+  useEffect(() => {
+    if (isRunning && checklistData) {
+      // Start polling every 5 seconds
+      checklistPollIntervalRef.current = setInterval(() => {
+        pollChecklistUpdate()
+      }, 5000)
+    } else {
+      // Stop polling
+      if (checklistPollIntervalRef.current) {
+        clearInterval(checklistPollIntervalRef.current)
+        checklistPollIntervalRef.current = null
+      }
+    }
+
+    return () => {
+      if (checklistPollIntervalRef.current) {
+        clearInterval(checklistPollIntervalRef.current)
+        checklistPollIntervalRef.current = null
+      }
+    }
+  }, [isRunning, checklistData, mode])
+
+  // Function to toggle checklist item completion
+  const toggleChecklistItem = (itemId: string) => {
+    if (!checklistData) return
+    
+    const item = checklistData.checklist.find(i => i.id === itemId)
+    if (!item) return
+    
+    // If we're completing (not unchecking) an item, check for out-of-order
+    if (!item.completed) {
+      const { isOutOfOrder, skippedSteps } = checkOutOfOrder(checklistData.checklist, itemId)
+      if (isOutOfOrder) {
+        speakOutOfOrderWarning(skippedSteps)
+      }
+    }
+    
+    setChecklistData(prev => {
+      if (!prev) return prev
+      return {
+        ...prev,
+        checklist: prev.checklist.map(i =>
+          i.id === itemId ? { ...i, completed: !i.completed } : i
+        )
+      }
+    })
+  }
+
   // Video file effect
   useEffect(() => {
     if (activeTab !== 'video' || !videoFile) return
@@ -123,6 +361,16 @@ function App() {
       onResult: (result) => {
         setResults(prev => [result.result, ...prev].slice(0, 10))
         getChatAdvice(result.result)
+        
+        // Collect descriptions for checklist generation
+        collectedDescriptions.current = [...collectedDescriptions.current, result.result].slice(-10)
+        
+        // Start 10-second timer for checklist generation on first result
+        if (!checklistTimeoutRef.current && !checklistData) {
+          checklistTimeoutRef.current = setTimeout(() => {
+            generateChecklist()
+          }, 10000)
+        }
       }
     })
 
@@ -152,6 +400,16 @@ function App() {
       onResult: (result) => {
         setResults(prev => [result.result, ...prev].slice(0, 10))
         getChatAdvice(result.result)
+        
+        // Collect descriptions for checklist generation
+        collectedDescriptions.current = [...collectedDescriptions.current, result.result].slice(-10)
+        
+        // Start 10-second timer for checklist generation on first result
+        if (!checklistTimeoutRef.current && !checklistData) {
+          checklistTimeoutRef.current = setTimeout(() => {
+            generateChecklist()
+          }, 10000)
+        }
       }
     })
 
@@ -172,13 +430,26 @@ function App() {
       clearTimeout(adviceTimeoutRef.current)
       adviceTimeoutRef.current = null
     }
+    // Clear checklist timeout
+    if (checklistTimeoutRef.current) {
+      clearTimeout(checklistTimeoutRef.current)
+      checklistTimeoutRef.current = null
+    }
+    // Clear checklist poll interval
+    if (checklistPollIntervalRef.current) {
+      clearInterval(checklistPollIntervalRef.current)
+      checklistPollIntervalRef.current = null
+    }
     setMode(newMode)
     setResults([])
     setChatAdvice([])
+    setChecklistData(null)
     setError(null)
     setIsRateLimited(false)
     setIsGettingAdvice(false)
+    setIsGeneratingChecklist(false)
     lastAdviceCallTime.current = 0
+    collectedDescriptions.current = []
     sessionId.current = `session-${Date.now()}`
   }
 
@@ -192,21 +463,40 @@ function App() {
       clearTimeout(adviceTimeoutRef.current)
       adviceTimeoutRef.current = null
     }
+    // Clear checklist timeout
+    if (checklistTimeoutRef.current) {
+      clearTimeout(checklistTimeoutRef.current)
+      checklistTimeoutRef.current = null
+    }
+    // Clear checklist poll interval
+    if (checklistPollIntervalRef.current) {
+      clearInterval(checklistPollIntervalRef.current)
+      checklistPollIntervalRef.current = null
+    }
     setActiveTab(tab)
     setResults([])
     setChatAdvice([])
+    setChecklistData(null)
     setError(null)
     setIsRateLimited(false)
     setIsGettingAdvice(false)
+    setIsGeneratingChecklist(false)
     lastAdviceCallTime.current = 0
+    collectedDescriptions.current = []
     sessionId.current = `session-${Date.now()}`
   }
 
-  // Cleanup timeout on unmount
+  // Cleanup timeouts on unmount
   useEffect(() => {
     return () => {
       if (adviceTimeoutRef.current) {
         clearTimeout(adviceTimeoutRef.current)
+      }
+      if (checklistTimeoutRef.current) {
+        clearTimeout(checklistTimeoutRef.current)
+      }
+      if (checklistPollIntervalRef.current) {
+        clearInterval(checklistPollIntervalRef.current)
       }
     }
   }, [])
@@ -217,6 +507,16 @@ function App() {
       if (videoUrl) {
         URL.revokeObjectURL(videoUrl)
       }
+      // Clear checklist timeout
+      if (checklistTimeoutRef.current) {
+        clearTimeout(checklistTimeoutRef.current)
+        checklistTimeoutRef.current = null
+      }
+      // Clear checklist poll interval
+      if (checklistPollIntervalRef.current) {
+        clearInterval(checklistPollIntervalRef.current)
+        checklistPollIntervalRef.current = null
+      }
       
       const url = URL.createObjectURL(file)
       setVideoUrl(url)
@@ -224,7 +524,10 @@ function App() {
       setError(null)
       setResults([])
       setChatAdvice([])
+      setChecklistData(null)
       setIsRunning(false)
+      setIsGeneratingChecklist(false)
+      collectedDescriptions.current = []
       sessionId.current = `session-${Date.now()}`
     }
   }
@@ -414,14 +717,14 @@ function App() {
                 disabled={loading || isRunning || (activeTab === 'video' && !videoFile)}
                 className="btn btn-start"
               >
-                {loading ? 'Starting...' : 'Start Vision'}
+                {loading ? 'Starting...' : 'Start'}
               </button>
               <button
                 onClick={handleStop}
                 disabled={loading || !isRunning}
                 className="btn btn-stop"
               >
-                {loading ? 'Stopping...' : 'Stop Vision'}
+                {loading ? 'Stopping...' : 'Stop'}
               </button>
             </div>
           </div>
@@ -488,6 +791,51 @@ function App() {
               ) : (
                 <div className="results-empty">
                   No detected text yet. Start the vision service to see results.
+                </div>
+              )}
+            </div>
+          </div>
+
+          <div className="results-card checklist-card">
+            <h3>📋 {mode === 'cooking' ? 'Recipe Checklist' : 'Problem-Solving Steps'}</h3>
+            {isGeneratingChecklist && (
+              <div style={{ 
+                padding: '10px', 
+                backgroundColor: '#fef3c7', 
+                borderRadius: '8px',
+                marginBottom: '10px',
+                color: '#92400e'
+              }}>
+                ⏳ Generating checklist from video analysis...
+              </div>
+            )}
+            <div className="checklist-container">
+              {checklistData ? (
+                <>
+                  <div className="checklist-title">{checklistData.title}</div>
+                  <div className="checklist-items">
+                    {checklistData.checklist.map((item) => (
+                      <div 
+                        key={item.id} 
+                        className={`checklist-item ${item.completed ? 'completed' : ''}`}
+                        onClick={() => toggleChecklistItem(item.id)}
+                      >
+                        <div className="checklist-checkbox">
+                          {item.completed ? '✓' : ''}
+                        </div>
+                        <span className="checklist-text">{item.text}</span>
+                      </div>
+                    ))}
+                  </div>
+                  <div className="checklist-progress">
+                    {checklistData.checklist.filter(item => item.completed).length} / {checklistData.checklist.length} completed
+                  </div>
+                </>
+              ) : (
+                <div className="results-empty">
+                  {isRunning 
+                    ? 'Checklist will be generated after 10 seconds of video analysis...'
+                    : 'Start the vision service to generate a checklist.'}
                 </div>
               )}
             </div>
