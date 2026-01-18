@@ -24,6 +24,19 @@ const conversationHistory = new Map<string, any[]>();
 // Track last API call time per session
 const lastCallTime = new Map<string, number>();
 
+// Checklist item interface for consistent typing
+interface ChecklistItem {
+  id: string;
+  text: string;
+  completed: boolean;
+}
+
+interface ChecklistResponse {
+  checklist: ChecklistItem[];
+  title: string;
+  timestamp: string;
+}
+
 router.post('/advice', async (req, res) => {
   try {
     const { visionResult, sessionId = 'default', recipeContext = '', mode = 'cooking' } = req.body;
@@ -119,6 +132,122 @@ Focus on helping the student understand the process. If the vision result shows 
     console.error('ChatGPT API Error:', error instanceof Error ? error.message : error);
     res.status(500).json({ 
       error: 'Failed to get advice from ChatGPT',
+      details: error instanceof Error ? error.message : 'Unknown error'
+    });
+  }
+});
+
+// Generate a checklist based on accumulated video descriptions
+router.post('/checklist', async (req, res) => {
+  try {
+    const { videoDescriptions, recipeContext = '', mode = 'cooking' } = req.body;
+
+    if (!videoDescriptions || !Array.isArray(videoDescriptions) || videoDescriptions.length === 0) {
+      return res.status(400).json({ error: 'Video descriptions array is required' });
+    }
+
+    // Combine all video descriptions into a summary
+    const combinedDescription = videoDescriptions.join('\n\n');
+
+    const systemPrompt = mode === 'cooking'
+      ? `You are a helpful cooking assistant. Based on the video descriptions provided, create a checklist of steps the person should follow or has been following.
+
+IMPORTANT: You MUST respond with ONLY a valid JSON object in this exact format, no other text:
+{
+  "title": "Recipe/Dish Name",
+  "checklist": [
+    { "id": "1", "text": "Step description here", "completed": false },
+    { "id": "2", "text": "Another step", "completed": false }
+  ]
+}
+
+Rules:
+- Generate 5-10 actionable checklist items based on what you observe
+- Each item should be a clear, concise cooking step
+- Mark items as "completed": true if the video shows that step was already done
+- Mark items as "completed": false if the step still needs to be done or is in progress
+- Order items logically (prep work first, then cooking steps)
+- The title should describe what's being made based on the video`
+      : `You are a helpful math tutor. Based on the video descriptions of the math problem, create a checklist of steps to solve it.
+
+IMPORTANT: You MUST respond with ONLY a valid JSON object in this exact format, no other text:
+{
+  "title": "Problem Type/Topic",
+  "checklist": [
+    { "id": "1", "text": "Step description here", "completed": false },
+    { "id": "2", "text": "Another step", "completed": false }
+  ]
+}
+
+Rules:
+- Generate 5-10 actionable checklist items for solving the problem
+- Each item should be a clear step in the solution process
+- Mark items as "completed": true if the video shows that step was already done
+- Mark items as "completed": false if the step still needs to be done
+- Order items in logical problem-solving sequence
+- The title should describe the type of math problem being solved`;
+
+    const userMessage = mode === 'cooking'
+      ? `Here are the video descriptions of the cooking session:\n\n${combinedDescription}${recipeContext ? `\n\nThe user mentioned they are making: ${recipeContext}` : ''}`
+      : `Here are the video descriptions of the math problem:\n\n${combinedDescription}${recipeContext ? `\n\nThe user mentioned the topic is: ${recipeContext}` : ''}`;
+
+    // Get OpenAI client and call API
+    const client = getOpenAIClient();
+    const completion = await client.chat.completions.create({
+      model: 'gpt-4o-mini',
+      messages: [
+        { role: 'system', content: systemPrompt },
+        { role: 'user', content: userMessage }
+      ],
+      max_tokens: 1500,
+      temperature: 0.7,
+    });
+
+    const responseText = completion.choices[0]?.message?.content || '';
+    
+    // Parse the JSON response
+    let parsedResponse: { title: string; checklist: ChecklistItem[] };
+    try {
+      // Try to extract JSON from the response (in case there's extra text)
+      const jsonMatch = responseText.match(/\{[\s\S]*\}/);
+      if (!jsonMatch) {
+        throw new Error('No JSON found in response');
+      }
+      parsedResponse = JSON.parse(jsonMatch[0]);
+      
+      // Validate the structure
+      if (!parsedResponse.title || !Array.isArray(parsedResponse.checklist)) {
+        throw new Error('Invalid response structure');
+      }
+      
+      // Ensure each checklist item has the required fields
+      parsedResponse.checklist = parsedResponse.checklist.map((item, index) => ({
+        id: item.id || String(index + 1),
+        text: item.text || 'Unknown step',
+        completed: Boolean(item.completed)
+      }));
+    } catch (parseError) {
+      console.error('Failed to parse checklist response:', responseText);
+      // Return a fallback response
+      parsedResponse = {
+        title: mode === 'cooking' ? 'Cooking Steps' : 'Math Problem Steps',
+        checklist: [
+          { id: '1', text: 'Unable to generate checklist. Please try again.', completed: false }
+        ]
+      };
+    }
+
+    const response: ChecklistResponse = {
+      ...parsedResponse,
+      timestamp: new Date().toISOString()
+    };
+
+    res.json(response);
+
+  } catch (error) {
+    console.error('Checklist API Error:', error instanceof Error ? error.message : error);
+    res.status(500).json({ 
+      error: 'Failed to generate checklist',
       details: error instanceof Error ? error.message : 'Unknown error'
     });
   }

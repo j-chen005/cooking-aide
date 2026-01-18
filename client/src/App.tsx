@@ -7,6 +7,18 @@ interface AdviceItem {
   timestamp: string
 }
 
+interface ChecklistItem {
+  id: string
+  text: string
+  completed: boolean
+}
+
+interface ChecklistData {
+  title: string
+  checklist: ChecklistItem[]
+  timestamp: string
+}
+
 type TabType = 'video' | 'camera'
 type ModeType = 'cooking' | 'school'
 
@@ -23,12 +35,16 @@ function App() {
   const [isGettingAdvice, setIsGettingAdvice] = useState(false)
   const [isRateLimited, setIsRateLimited] = useState(false)
   const [recipeDescription, setRecipeDescription] = useState<string>('')
+  const [checklistData, setChecklistData] = useState<ChecklistData | null>(null)
+  const [isGeneratingChecklist, setIsGeneratingChecklist] = useState(false)
   const visionRef = useRef<RealtimeVision | null>(null)
   const videoRef = useRef<HTMLVideoElement | null>(null)
   const cameraVideoRef = useRef<HTMLVideoElement | null>(null)
   const sessionId = useRef<string>(`session-${Date.now()}`)
   const lastAdviceCallTime = useRef<number>(0)
   const adviceTimeoutRef = useRef<number | null>(null)
+  const checklistTimeoutRef = useRef<number | null>(null)
+  const collectedDescriptions = useRef<string[]>([])
 
   // Function to get the prompt based on the current mode
   const getPromptForMode = () => {
@@ -107,6 +123,54 @@ function App() {
     }
   }
 
+  // Function to generate checklist from accumulated descriptions
+  const generateChecklist = async () => {
+    if (collectedDescriptions.current.length === 0) return
+
+    setIsGeneratingChecklist(true)
+    try {
+      const apiUrl = import.meta.env.VITE_API_URL || 'http://localhost:3001'
+      const response = await fetch(`${apiUrl}/api/chatgpt/checklist`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          videoDescriptions: collectedDescriptions.current,
+          recipeContext: recipeDescription,
+          mode: mode
+        }),
+      })
+
+      if (!response.ok) {
+        console.error('Checklist generation failed:', response.statusText)
+        return
+      }
+
+      const data: ChecklistData = await response.json()
+      setChecklistData(data)
+    } catch (err) {
+      console.error('Failed to generate checklist:', err)
+    } finally {
+      setIsGeneratingChecklist(false)
+    }
+  }
+
+  // Function to toggle checklist item completion
+  const toggleChecklistItem = (itemId: string) => {
+    if (!checklistData) return
+    
+    setChecklistData(prev => {
+      if (!prev) return prev
+      return {
+        ...prev,
+        checklist: prev.checklist.map(item =>
+          item.id === itemId ? { ...item, completed: !item.completed } : item
+        )
+      }
+    })
+  }
+
   // Video file effect
   useEffect(() => {
     if (activeTab !== 'video' || !videoFile) return
@@ -123,6 +187,16 @@ function App() {
       onResult: (result) => {
         setResults(prev => [result.result, ...prev].slice(0, 10))
         getChatAdvice(result.result)
+        
+        // Collect descriptions for checklist generation
+        collectedDescriptions.current = [...collectedDescriptions.current, result.result].slice(-10)
+        
+        // Start 10-second timer for checklist generation on first result
+        if (!checklistTimeoutRef.current && !checklistData) {
+          checklistTimeoutRef.current = setTimeout(() => {
+            generateChecklist()
+          }, 10000)
+        }
       }
     })
 
@@ -152,6 +226,16 @@ function App() {
       onResult: (result) => {
         setResults(prev => [result.result, ...prev].slice(0, 10))
         getChatAdvice(result.result)
+        
+        // Collect descriptions for checklist generation
+        collectedDescriptions.current = [...collectedDescriptions.current, result.result].slice(-10)
+        
+        // Start 10-second timer for checklist generation on first result
+        if (!checklistTimeoutRef.current && !checklistData) {
+          checklistTimeoutRef.current = setTimeout(() => {
+            generateChecklist()
+          }, 10000)
+        }
       }
     })
 
@@ -172,13 +256,21 @@ function App() {
       clearTimeout(adviceTimeoutRef.current)
       adviceTimeoutRef.current = null
     }
+    // Clear checklist timeout
+    if (checklistTimeoutRef.current) {
+      clearTimeout(checklistTimeoutRef.current)
+      checklistTimeoutRef.current = null
+    }
     setMode(newMode)
     setResults([])
     setChatAdvice([])
+    setChecklistData(null)
     setError(null)
     setIsRateLimited(false)
     setIsGettingAdvice(false)
+    setIsGeneratingChecklist(false)
     lastAdviceCallTime.current = 0
+    collectedDescriptions.current = []
     sessionId.current = `session-${Date.now()}`
   }
 
@@ -192,21 +284,32 @@ function App() {
       clearTimeout(adviceTimeoutRef.current)
       adviceTimeoutRef.current = null
     }
+    // Clear checklist timeout
+    if (checklistTimeoutRef.current) {
+      clearTimeout(checklistTimeoutRef.current)
+      checklistTimeoutRef.current = null
+    }
     setActiveTab(tab)
     setResults([])
     setChatAdvice([])
+    setChecklistData(null)
     setError(null)
     setIsRateLimited(false)
     setIsGettingAdvice(false)
+    setIsGeneratingChecklist(false)
     lastAdviceCallTime.current = 0
+    collectedDescriptions.current = []
     sessionId.current = `session-${Date.now()}`
   }
 
-  // Cleanup timeout on unmount
+  // Cleanup timeouts on unmount
   useEffect(() => {
     return () => {
       if (adviceTimeoutRef.current) {
         clearTimeout(adviceTimeoutRef.current)
+      }
+      if (checklistTimeoutRef.current) {
+        clearTimeout(checklistTimeoutRef.current)
       }
     }
   }, [])
@@ -217,6 +320,11 @@ function App() {
       if (videoUrl) {
         URL.revokeObjectURL(videoUrl)
       }
+      // Clear checklist timeout
+      if (checklistTimeoutRef.current) {
+        clearTimeout(checklistTimeoutRef.current)
+        checklistTimeoutRef.current = null
+      }
       
       const url = URL.createObjectURL(file)
       setVideoUrl(url)
@@ -224,7 +332,10 @@ function App() {
       setError(null)
       setResults([])
       setChatAdvice([])
+      setChecklistData(null)
       setIsRunning(false)
+      setIsGeneratingChecklist(false)
+      collectedDescriptions.current = []
       sessionId.current = `session-${Date.now()}`
     }
   }
@@ -488,6 +599,51 @@ function App() {
               ) : (
                 <div className="results-empty">
                   No detected text yet. Start the vision service to see results.
+                </div>
+              )}
+            </div>
+          </div>
+
+          <div className="results-card checklist-card">
+            <h3>📋 {mode === 'cooking' ? 'Recipe Checklist' : 'Problem-Solving Steps'}</h3>
+            {isGeneratingChecklist && (
+              <div style={{ 
+                padding: '10px', 
+                backgroundColor: '#fef3c7', 
+                borderRadius: '8px',
+                marginBottom: '10px',
+                color: '#92400e'
+              }}>
+                ⏳ Generating checklist from video analysis...
+              </div>
+            )}
+            <div className="checklist-container">
+              {checklistData ? (
+                <>
+                  <div className="checklist-title">{checklistData.title}</div>
+                  <div className="checklist-items">
+                    {checklistData.checklist.map((item) => (
+                      <div 
+                        key={item.id} 
+                        className={`checklist-item ${item.completed ? 'completed' : ''}`}
+                        onClick={() => toggleChecklistItem(item.id)}
+                      >
+                        <div className="checklist-checkbox">
+                          {item.completed ? '✓' : ''}
+                        </div>
+                        <span className="checklist-text">{item.text}</span>
+                      </div>
+                    ))}
+                  </div>
+                  <div className="checklist-progress">
+                    {checklistData.checklist.filter(item => item.completed).length} / {checklistData.checklist.length} completed
+                  </div>
+                </>
+              ) : (
+                <div className="results-empty">
+                  {isRunning 
+                    ? 'Checklist will be generated after 10 seconds of video analysis...'
+                    : 'Start the vision service to generate a checklist.'}
                 </div>
               )}
             </div>
