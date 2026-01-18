@@ -287,7 +287,7 @@ function App() {
   return (
     <div className="app">
       <header className="app-header">
-        <h1>{mode === 'cooking' ? '🍳 Cooking Aide' : '📚 School Aide'}</h1>
+        <h1>🤖 InstructorAI</h1>
         <p>Real-time Vision AI Assistant</p>
       </header>
       
