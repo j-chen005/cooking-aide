@@ -36,6 +36,11 @@ function App() {
         }),
       })
 
+      if (response.status === 429) {
+        // Rate limited, skip silently
+        return
+      }
+
       if (!response.ok) {
         throw new Error('Failed to get advice from ChatGPT')
       }
@@ -43,7 +48,7 @@ function App() {
       const data = await response.json()
       setChatAdvice(prev => [data, ...prev].slice(0, 10))
     } catch (err) {
-      // Silently fail - user will notice if advice stops coming
+      // Silently fail
     } finally {
       setIsGettingAdvice(false)
     }

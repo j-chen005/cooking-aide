@@ -21,6 +21,8 @@ const getOpenAIClient = () => {
 
 // Store conversation history for context
 const conversationHistory = new Map<string, any[]>();
+// Track last API call time per session
+const lastCallTime = new Map<string, number>();
 
 router.post('/advice', async (req, res) => {
   try {
@@ -29,6 +31,17 @@ router.post('/advice', async (req, res) => {
     if (!visionResult) {
       return res.status(400).json({ error: 'Vision result is required' });
     }
+
+    // Rate limit: Only call API once every 5 seconds
+    const now = Date.now();
+    const lastCall = lastCallTime.get(sessionId) || 0;
+    if (now - lastCall < 5000) {
+      return res.status(429).json({ 
+        error: 'Rate limited',
+        details: 'Please wait before requesting more advice'
+      });
+    }
+    lastCallTime.set(sessionId, now);
 
     // Get or initialize conversation history for this session
     if (!conversationHistory.has(sessionId)) {
@@ -57,9 +70,9 @@ Only respond if there's something meaningful to say. If the vision result shows 
       content: `What I'm seeing in the kitchen: ${visionResult}`
     });
 
-    // Keep conversation history manageable (last 20 messages + system message)
-    if (history.length > 21) {
-      history.splice(1, history.length - 21);
+    // Keep only last 5 vision messages (10 messages total: 5 user + 5 assistant, plus system message)
+    if (history.length > 11) {
+      history.splice(1, history.length - 11);
     }
 
     // Get OpenAI client and call API
