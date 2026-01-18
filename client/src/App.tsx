@@ -7,7 +7,10 @@ interface AdviceItem {
   timestamp: string
 }
 
+type TabType = 'video' | 'camera'
+
 function App() {
+  const [activeTab, setActiveTab] = useState<TabType>('video')
   const [isRunning, setIsRunning] = useState(false)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -16,14 +19,49 @@ function App() {
   const [videoUrl, setVideoUrl] = useState<string | null>(null)
   const [chatAdvice, setChatAdvice] = useState<AdviceItem[]>([])
   const [isGettingAdvice, setIsGettingAdvice] = useState(false)
+  const [isRateLimited, setIsRateLimited] = useState(false)
   const [recipeDescription, setRecipeDescription] = useState<string>('')
   const visionRef = useRef<RealtimeVision | null>(null)
   const videoRef = useRef<HTMLVideoElement | null>(null)
+  const cameraVideoRef = useRef<HTMLVideoElement | null>(null)
   const sessionId = useRef<string>(`session-${Date.now()}`)
+  const lastAdviceCallTime = useRef<number>(0)
+  const adviceTimeoutRef = useRef<number | null>(null)
 
-  // Function to get ChatGPT advice
-  const getChatAdvice = async (visionResult: string) => {
+  // Function to get ChatGPT advice with debouncing
+  const getChatAdvice = (visionResult: string) => {
+    // Clear any pending timeout
+    if (adviceTimeoutRef.current) {
+      clearTimeout(adviceTimeoutRef.current)
+    }
+
+    // Check if we're within the rate limit window (8 seconds to match server)
+    const now = Date.now()
+    const timeSinceLastCall = now - lastAdviceCallTime.current
+    
+    if (timeSinceLastCall < 8000) {
+      // Schedule the call for after the rate limit window
+      const delay = 8000 - timeSinceLastCall
+      setIsRateLimited(true)
+      
+      adviceTimeoutRef.current = setTimeout(() => {
+        makeAdviceRequest(visionResult)
+        setIsRateLimited(false)
+      }, delay)
+      return
+    }
+
+    // Update timestamp BEFORE making the request to prevent race conditions
+    lastAdviceCallTime.current = Date.now()
+    
+    // Otherwise call immediately
+    makeAdviceRequest(visionResult)
+  }
+
+  const makeAdviceRequest = async (visionResult: string) => {
     setIsGettingAdvice(true)
+    setIsRateLimited(false)
+    
     try {
       const apiUrl = import.meta.env.VITE_API_URL || 'http://localhost:3001'
       const response = await fetch(`${apiUrl}/api/chatgpt/advice`, {
@@ -39,25 +77,27 @@ function App() {
       })
 
       if (response.status === 429) {
-        // Rate limited, skip silently
+        setIsRateLimited(true)
         return
       }
 
       if (!response.ok) {
-        throw new Error('Failed to get advice from ChatGPT')
+        return
       }
 
       const data = await response.json()
       setChatAdvice(prev => [data, ...prev].slice(0, 10))
+      setIsRateLimited(false)
     } catch (err) {
-      // Silently fail
+      // Silently fail for network errors
     } finally {
       setIsGettingAdvice(false)
     }
   }
 
+  // Video file effect
   useEffect(() => {
-    if (!videoFile) return
+    if (activeTab !== 'video' || !videoFile) return
 
     if (visionRef.current) {
       visionRef.current.stop().catch(() => {})
@@ -82,7 +122,62 @@ function App() {
         URL.revokeObjectURL(videoUrl)
       }
     }
-  }, [videoFile])
+  }, [videoFile, activeTab])
+
+  // Camera effect
+  useEffect(() => {
+    if (activeTab !== 'camera') return
+
+    if (visionRef.current) {
+      visionRef.current.stop().catch(() => {})
+    }
+
+    visionRef.current = new RealtimeVision({
+      apiUrl: 'https://cluster1.overshoot.ai/api/v0.2',
+      apiKey: import.meta.env.VITE_OVERSHOOT_API_KEY || 'your-api-key',
+      prompt: "You are a master chef watching another chef cook. Describe what you see, including the ingredients and the steps of the recipe. Focus more on the chef's actions over the background.",
+      source: { type: 'camera', cameraFacing: 'user' },
+      onResult: (result) => {
+        setResults(prev => [result.result, ...prev].slice(0, 10))
+        getChatAdvice(result.result)
+      }
+    })
+
+    return () => {
+      if (visionRef.current) {
+        visionRef.current.stop().catch(() => {})
+      }
+    }
+  }, [activeTab])
+
+  // Handle tab change
+  const handleTabChange = (tab: TabType) => {
+    if (isRunning) {
+      handleStop()
+    }
+    // Clear pending advice timeout
+    if (adviceTimeoutRef.current) {
+      clearTimeout(adviceTimeoutRef.current)
+      adviceTimeoutRef.current = null
+    }
+    setActiveTab(tab)
+    setResults([])
+    setChatAdvice([])
+    setError(null)
+    setIsRateLimited(false)
+    setIsGettingAdvice(false)
+    lastAdviceCallTime.current = 0
+    sessionId.current = `session-${Date.now()}`
+  }
+
+  // Cleanup timeout on unmount
+  useEffect(() => {
+    return () => {
+      if (adviceTimeoutRef.current) {
+        clearTimeout(adviceTimeoutRef.current)
+      }
+    }
+  }, [])
 
   const handleFileSelect = (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0]
@@ -110,9 +205,14 @@ function App() {
         await visionRef.current.start()
         setIsRunning(true)
         
-        if (videoRef.current) {
+        if (activeTab === 'video' && videoRef.current) {
           videoRef.current.currentTime = 0
           await videoRef.current.play()
+        } else if (activeTab === 'camera' && cameraVideoRef.current) {
+          // Get camera stream and display it
+          const stream = await navigator.mediaDevices.getUserMedia({ video: true })
+          cameraVideoRef.current.srcObject = stream
+          await cameraVideoRef.current.play()
         }
       }
     } catch (err) {
@@ -134,8 +234,15 @@ function App() {
         await visionRef.current.stop()
         setIsRunning(false)
         
-        if (videoRef.current) {
+        if (activeTab === 'video' && videoRef.current) {
           videoRef.current.pause()
+        } else if (activeTab === 'camera' && cameraVideoRef.current) {
+          // Stop camera stream
+          const stream = cameraVideoRef.current.srcObject as MediaStream
+          if (stream) {
+            stream.getTracks().forEach(track => track.stop())
+          }
+          cameraVideoRef.current.srcObject = null
         }
       }
     } catch (err) {
@@ -153,6 +260,22 @@ function App() {
       </header>
       
       <main className="app-main">
+        {/* Tab Navigation */}
+        <div className="tabs">
+          <button
+            className={`tab ${activeTab === 'video' ? 'active' : ''}`}
+            onClick={() => handleTabChange('video')}
+          >
+            📹 Video File
+          </button>
+          <button
+            className={`tab ${activeTab === 'camera' ? 'active' : ''}`}
+            onClick={() => handleTabChange('camera')}
+          >
+            📷 Live Camera
+          </button>
+        </div>
+
         <input
           type="text"
           value={recipeDescription}
@@ -163,126 +286,162 @@ function App() {
 
         <div className="cards-row">
           <div className="status-card">
-            <h2>Select Video File</h2>
-          <div style={{ marginBottom: '20px' }}>
-            <input
-              type="file"
-              accept="video/*"
-              onChange={handleFileSelect}
-              style={{
-                padding: '10px',
-                border: '2px solid #ddd',
-                borderRadius: '8px',
-                width: '100%',
-                cursor: 'pointer'
-              }}
-            />
-            {videoFile && (
-              <p style={{ marginTop: '10px', color: '#666', fontSize: '14px' }}>
-                📹 Selected: {videoFile.name}
-              </p>
-            )}
-          </div>
+            {activeTab === 'video' ? (
+              <>
+                <h2>Select Video File</h2>
+                <div style={{ marginBottom: '20px' }}>
+                  <input
+                    type="file"
+                    accept="video/*"
+                    onChange={handleFileSelect}
+                    style={{
+                      padding: '10px',
+                      border: '2px solid #ddd',
+                      borderRadius: '8px',
+                      width: '100%',
+                      cursor: 'pointer'
+                    }}
+                  />
+                  {videoFile && (
+                    <p style={{ marginTop: '10px', color: '#666', fontSize: '14px' }}>
+                      📹 Selected: {videoFile.name}
+                    </p>
+                  )}
+                </div>
 
-          {videoUrl && (
-            <div style={{ marginBottom: '20px' }}>
-              <h3>Video Preview</h3>
-              <video
-                ref={videoRef}
-                src={videoUrl}
-                controls
-                style={{
-                  width: '100%',
-                  borderRadius: '8px',
-                  backgroundColor: '#000'
-                }}
-              />
-            </div>
-          )}
-
-          <h2>Vision Service Status</h2>
-          <div className={`status-indicator ${isRunning ? 'running' : 'stopped'}`}>
-            <span className="status-dot"></span>
-            <span>{isRunning ? 'Running' : 'Stopped'}</span>
-          </div>
-          
-          {error && (
-            <div className="error-message">
-              {error}
-            </div>
-          )}
-
-          <div className="controls">
-            <button
-              onClick={handleStart}
-              disabled={loading || isRunning || !videoFile}
-              className="btn btn-start"
-            >
-              {loading ? 'Starting...' : 'Start Vision'}
-            </button>
-            <button
-              onClick={handleStop}
-              disabled={loading || !isRunning}
-              className="btn btn-stop"
-            >
-              {loading ? 'Stopping...' : 'Stop Vision'}
-            </button>
-          </div>
-        </div>
-
-        <div className="results-card">
-          <h3>🤖 AI Cooking Advice</h3>
-          {isGettingAdvice && (
-            <div style={{ 
-              padding: '10px', 
-              backgroundColor: '#f0f9ff', 
-              borderRadius: '8px',
-              marginBottom: '10px',
-              color: '#0369a1'
-            }}>
-              💭 Getting advice from ChatGPT...
-            </div>
-          )}
-          <div className="results-list">
-            {chatAdvice.length > 0 ? (
-              chatAdvice.map((item, index) => (
-                <div key={index} className="result-item" style={{
-                  backgroundColor: '#f0fdf4',
-                  borderLeft: '4px solid #22c55e'
-                }}>
-                  <span className="result-timestamp">
-                    {new Date(item.timestamp).toLocaleTimeString()}
-                  </span>
-                  <p style={{ fontWeight: 500, color: '#166534' }}>
-                    {item.advice}
+                {videoUrl && (
+                  <div style={{ marginBottom: '20px' }}>
+                    <h3>Video Preview</h3>
+                    <video
+                      ref={videoRef}
+                      src={videoUrl}
+                      controls
+                      style={{
+                        width: '100%',
+                        borderRadius: '8px',
+                        backgroundColor: '#000'
+                      }}
+                    />
+                  </div>
+                )}
+              </>
+            ) : (
+              <>
+                <h2>Live Camera Feed</h2>
+                <div style={{ marginBottom: '20px' }}>
+                  <p style={{ color: '#666', fontSize: '14px', marginBottom: '10px' }}>
+                    📷 Click "Start Vision" to enable your camera
                   </p>
+                  <video
+                    ref={cameraVideoRef}
+                    autoPlay
+                    playsInline
+                    muted
+                    style={{
+                      width: '100%',
+                      borderRadius: '8px',
+                      backgroundColor: '#000',
+                      minHeight: '300px'
+                    }}
+                  />
                 </div>
-              ))
-            ) : (
-              <div className="results-empty">
-                No AI advice yet. Start the vision service to get real-time cooking tips!
-              </div>
+              </>
             )}
-          </div>
-        </div>
 
-        <div className="results-card">
-          <h3>👁️ Vision Detection</h3>
-          <div className="results-list">
-            {results.length > 0 ? (
-              results.map((result, index) => (
-                <div key={index} className="result-item">
-                  <span className="result-timestamp">{new Date().toLocaleTimeString()}</span>
-                  <p>{result}</p>
-                </div>
-              ))
-            ) : (
-              <div className="results-empty">
-                No detected text yet. Start the vision service to see results.
+            <h2>Vision Service Status</h2>
+            <div className={`status-indicator ${isRunning ? 'running' : 'stopped'}`}>
+              <span className="status-dot"></span>
+              <span>{isRunning ? 'Running' : 'Stopped'}</span>
+            </div>
+            
+            {error && (
+              <div className="error-message">
+                {error}
               </div>
             )}
+
+            <div className="controls">
+              <button
+                onClick={handleStart}
+                disabled={loading || isRunning || (activeTab === 'video' && !videoFile)}
+                className="btn btn-start"
+              >
+                {loading ? 'Starting...' : 'Start Vision'}
+              </button>
+              <button
+                onClick={handleStop}
+                disabled={loading || !isRunning}
+                className="btn btn-stop"
+              >
+                {loading ? 'Stopping...' : 'Stop Vision'}
+              </button>
+            </div>
           </div>
-        </div>
+
+          <div className="results-card">
+            <h3>🤖 AI Cooking Advice</h3>
+            {isGettingAdvice && (
+              <div style={{ 
+                padding: '10px', 
+                backgroundColor: '#f0f9ff', 
+                borderRadius: '8px',
+                marginBottom: '10px',
+                color: '#0369a1'
+              }}>
+                💭 Getting advice from ChatGPT...
+              </div>
+            )}
+            {isRateLimited && !isGettingAdvice && (
+              <div style={{ 
+                padding: '10px', 
+                backgroundColor: '#fef3c7', 
+                borderRadius: '8px',
+                marginBottom: '10px',
+                color: '#92400e'
+              }}>
+                ⏱️ Rate limited - waiting to avoid too many requests...
+              </div>
+            )}
+            <div className="results-list">
+              {chatAdvice.length > 0 ? (
+                chatAdvice.map((item, index) => (
+                  <div key={index} className="result-item" style={{
+                    backgroundColor: '#f0fdf4',
+                    borderLeft: '4px solid #22c55e'
+                  }}>
+                    <span className="result-timestamp">
+                      {new Date(item.timestamp).toLocaleTimeString()}
+                    </span>
+                    <p style={{ fontWeight: 500, color: '#166534' }}>
+                      {item.advice}
+                    </p>
+                  </div>
+                ))
+              ) : (
+                <div className="results-empty">
+                  No AI advice yet. Start the vision service to get real-time cooking tips!
+                </div>
+              )}
+            </div>
+          </div>
+
+          <div className="results-card">
+            <h3>👁️ Vision Detection</h3>
+            <div className="results-list">
+              {results.length > 0 ? (
+                results.map((result, index) => (
+                  <div key={index} className="result-item">
+                    <span className="result-timestamp">{new Date().toLocaleTimeString()}</span>
+                    <p>{result}</p>
+                  </div>
+                ))
+              ) : (
+                <div className="results-empty">
+                  No detected text yet. Start the vision service to see results.
+                </div>
+              )}
+            </div>
+          </div>
         </div>
       </main>
     </div>
