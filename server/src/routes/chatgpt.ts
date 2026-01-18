@@ -253,6 +253,41 @@ Rules:
   }
 });
 
+// Text-to-speech endpoint for voice notifications
+router.post('/speak', async (req, res) => {
+  try {
+    const { text } = req.body;
+
+    if (!text) {
+      return res.status(400).json({ error: 'Text is required' });
+    }
+
+    // Get OpenAI client and call TTS API
+    const client = getOpenAIClient();
+    const mp3 = await client.audio.speech.create({
+      model: 'tts-1',
+      voice: 'nova',
+      input: text,
+    });
+
+    // Convert to buffer and send as audio
+    const buffer = Buffer.from(await mp3.arrayBuffer());
+    
+    res.set({
+      'Content-Type': 'audio/mpeg',
+      'Content-Length': buffer.length,
+    });
+    res.send(buffer);
+
+  } catch (error) {
+    console.error('TTS API Error:', error instanceof Error ? error.message : error);
+    res.status(500).json({ 
+      error: 'Failed to generate speech',
+      details: error instanceof Error ? error.message : 'Unknown error'
+    });
+  }
+});
+
 // Update checklist completion status based on new video descriptions
 router.post('/checklist-update', async (req, res) => {
   try {

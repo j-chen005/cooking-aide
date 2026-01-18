@@ -46,6 +46,7 @@ function App() {
   const checklistTimeoutRef = useRef<number | null>(null)
   const checklistPollIntervalRef = useRef<number | null>(null)
   const collectedDescriptions = useRef<string[]>([])
+  const isPlayingAudioRef = useRef<boolean>(false)
 
   // Function to get the prompt based on the current mode
   const getPromptForMode = () => {
@@ -124,6 +125,72 @@ function App() {
     }
   }
 
+  // Function to speak out-of-order warning using OpenAI TTS
+  const speakOutOfOrderWarning = async (stepText: string, skippedSteps: string[]) => {
+    // Don't play if already playing
+    if (isPlayingAudioRef.current) return
+    
+    isPlayingAudioRef.current = true
+    
+    try {
+      const apiUrl = import.meta.env.VITE_API_URL || 'http://localhost:3001'
+      const skippedList = skippedSteps.length === 1 
+        ? `step: ${skippedSteps[0]}`
+        : `steps: ${skippedSteps.slice(0, -1).join(', ')} and ${skippedSteps[skippedSteps.length - 1]}`
+      
+      const message = `Warning! You completed "${stepText}" out of order. You skipped the following ${skippedList}. Please make sure you haven't missed anything important.`
+      
+      const response = await fetch(`${apiUrl}/api/chatgpt/speak`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ text: message }),
+      })
+
+      if (!response.ok) {
+        console.error('TTS request failed:', response.statusText)
+        return
+      }
+
+      // Get the audio blob and play it
+      const audioBlob = await response.blob()
+      const audioUrl = URL.createObjectURL(audioBlob)
+      const audio = new Audio(audioUrl)
+      
+      audio.onended = () => {
+        URL.revokeObjectURL(audioUrl)
+        isPlayingAudioRef.current = false
+      }
+      
+      audio.onerror = () => {
+        URL.revokeObjectURL(audioUrl)
+        isPlayingAudioRef.current = false
+      }
+      
+      await audio.play()
+    } catch (err) {
+      console.error('Failed to play out-of-order warning:', err)
+      isPlayingAudioRef.current = false
+    }
+  }
+
+  // Function to check if completing a step would be out of order
+  const checkOutOfOrder = (checklist: ChecklistItem[], completingId: string): { isOutOfOrder: boolean, skippedSteps: string[] } => {
+    const completingIndex = checklist.findIndex(item => item.id === completingId)
+    if (completingIndex <= 0) return { isOutOfOrder: false, skippedSteps: [] }
+    
+    // Check if any previous items are not completed
+    const skippedSteps: string[] = []
+    for (let i = 0; i < completingIndex; i++) {
+      if (!checklist[i].completed) {
+        skippedSteps.push(checklist[i].text)
+      }
+    }
+    
+    return { isOutOfOrder: skippedSteps.length > 0, skippedSteps }
+  }
+
   // Function to generate checklist from accumulated descriptions
   const generateChecklist = async () => {
     if (collectedDescriptions.current.length === 0) return
@@ -186,6 +253,19 @@ function App() {
       // Update checklist items that should now be marked as completed
       // Only mark items as completed (never unmark), preserving original text
       if (data.completedIds && data.completedIds.length > 0) {
+        // Check for out-of-order completions before updating
+        for (const completingId of data.completedIds) {
+          const item = checklistData.checklist.find(i => i.id === completingId)
+          if (item && !item.completed) {
+            const { isOutOfOrder, skippedSteps } = checkOutOfOrder(checklistData.checklist, completingId)
+            if (isOutOfOrder) {
+              // Speak the warning (will only play if not already playing)
+              speakOutOfOrderWarning(item.text, skippedSteps)
+              break // Only warn about the first out-of-order item to avoid overwhelming
+            }
+          }
+        }
+        
         setChecklistData(prev => {
           if (!prev) return prev
           return {
@@ -230,12 +310,23 @@ function App() {
   const toggleChecklistItem = (itemId: string) => {
     if (!checklistData) return
     
+    const item = checklistData.checklist.find(i => i.id === itemId)
+    if (!item) return
+    
+    // If we're completing (not unchecking) an item, check for out-of-order
+    if (!item.completed) {
+      const { isOutOfOrder, skippedSteps } = checkOutOfOrder(checklistData.checklist, itemId)
+      if (isOutOfOrder) {
+        speakOutOfOrderWarning(item.text, skippedSteps)
+      }
+    }
+    
     setChecklistData(prev => {
       if (!prev) return prev
       return {
         ...prev,
-        checklist: prev.checklist.map(item =>
-          item.id === itemId ? { ...item, completed: !item.completed } : item
+        checklist: prev.checklist.map(i =>
+          i.id === itemId ? { ...i, completed: !i.completed } : i
         )
       }
     })
