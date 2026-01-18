@@ -2,6 +2,11 @@ import { useState, useEffect, useRef } from 'react'
 import { RealtimeVision } from '@overshoot/sdk'
 import './App.css'
 
+interface AdviceItem {
+  advice: string
+  timestamp: string
+}
+
 function App() {
   const [isRunning, setIsRunning] = useState(false)
   const [loading, setLoading] = useState(false)
@@ -9,33 +14,67 @@ function App() {
   const [results, setResults] = useState<string[]>([])
   const [videoFile, setVideoFile] = useState<File | null>(null)
   const [videoUrl, setVideoUrl] = useState<string | null>(null)
+  const [chatAdvice, setChatAdvice] = useState<AdviceItem[]>([])
+  const [isGettingAdvice, setIsGettingAdvice] = useState(false)
   const visionRef = useRef<RealtimeVision | null>(null)
   const videoRef = useRef<HTMLVideoElement | null>(null)
+  const sessionId = useRef<string>(`session-${Date.now()}`)
 
-  // Initialize vision instance when video file is selected
+  // Function to get ChatGPT advice
+  const getChatAdvice = async (visionResult: string) => {
+    setIsGettingAdvice(true)
+    try {
+      const apiUrl = import.meta.env.VITE_API_URL || 'http://localhost:3001'
+      const response = await fetch(`${apiUrl}/api/chatgpt/advice`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          visionResult,
+          sessionId: sessionId.current
+        }),
+      })
+
+      if (response.status === 429) {
+        // Rate limited, skip silently
+        return
+      }
+
+      if (!response.ok) {
+        throw new Error('Failed to get advice from ChatGPT')
+      }
+
+      const data = await response.json()
+      setChatAdvice(prev => [data, ...prev].slice(0, 10))
+    } catch (err) {
+      // Silently fail
+    } finally {
+      setIsGettingAdvice(false)
+    }
+  }
+
   useEffect(() => {
     if (!videoFile) return
 
-    // Cleanup previous instance
     if (visionRef.current) {
-      visionRef.current.stop().catch(console.error)
+      visionRef.current.stop().catch(() => {})
     }
 
     visionRef.current = new RealtimeVision({
       apiUrl: 'https://cluster1.overshoot.ai/api/v0.2',
       apiKey: import.meta.env.VITE_OVERSHOOT_API_KEY || 'your-api-key',
-      prompt: 'You are a master chef who knows everything about any dish. Your job is to be an assitant to the chef cooking and give advice and instructions to the chef. If you have no suggestions or advice, just give reaffirmations that they are doing great. You can give suggestions like: You’re stirring well; slowing it down here will deepen flavor., Great sear—waiting 15 more seconds will improve the crust. In about 30 seconds, you’ll want to lower the heat.',
+      prompt: "You are a master chef watching another amateur chef cook. Describe what you see, including the ingredients and the steps of the recipe. Focus more on the chef's actions over the background.",
       source: { type: 'video', file: videoFile },
       onResult: (result) => {
-        console.log('Vision result:', result.result)
-        setResults(prev => [result.result, ...prev].slice(0, 10)) // Keep last 10 results
+        setResults(prev => [result.result, ...prev].slice(0, 10))
+        getChatAdvice(result.result)
       }
     })
 
     return () => {
-      // Cleanup on unmount
       if (visionRef.current) {
-        visionRef.current.stop().catch(console.error)
+        visionRef.current.stop().catch(() => {})
       }
       if (videoUrl) {
         URL.revokeObjectURL(videoUrl)
@@ -46,18 +85,18 @@ function App() {
   const handleFileSelect = (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0]
     if (file) {
-      // Clean up previous video URL
       if (videoUrl) {
         URL.revokeObjectURL(videoUrl)
       }
       
-      // Create new video URL
       const url = URL.createObjectURL(file)
       setVideoUrl(url)
       setVideoFile(file)
       setError(null)
       setResults([])
+      setChatAdvice([])
       setIsRunning(false)
+      sessionId.current = `session-${Date.now()}`
     }
   }
 
@@ -69,38 +108,16 @@ function App() {
         await visionRef.current.start()
         setIsRunning(true)
         
-        // Start playing the video
         if (videoRef.current) {
-          videoRef.current.currentTime = 0 // Start from the beginning
+          videoRef.current.currentTime = 0
           await videoRef.current.play()
         }
       }
     } catch (err) {
-      console.error('Error starting vision:', err)
-      
-      // Provide helpful error messages
       let errorMessage = 'Failed to start vision service'
       if (err instanceof Error) {
         errorMessage = err.message
-        
-        // Check for common permission errors
-        if (errorMessage.includes('Permission denied') || 
-            errorMessage.includes('NotAllowedError') ||
-            errorMessage.includes('permission')) {
-          errorMessage = '🚫 Camera permission denied. Please:\n\n' +
-            '1. Click the camera icon in your browser address bar\n' +
-            '2. Select "Allow" for camera access\n' +
-            '3. Refresh the page and try again\n\n' +
-            'Make sure no other app is using your camera.'
-        } else if (errorMessage.includes('NotFoundError') || 
-                   errorMessage.includes('not found')) {
-          errorMessage = '📷 No camera found. Please connect a camera and try again.'
-        } else if (errorMessage.includes('NotReadableError') || 
-                   errorMessage.includes('Could not start')) {
-          errorMessage = '⚠️ Camera is already in use by another application. Close other apps using the camera and try again.'
-        }
       }
-      
       setError(errorMessage)
     } finally {
       setLoading(false)
@@ -115,13 +132,11 @@ function App() {
         await visionRef.current.stop()
         setIsRunning(false)
         
-        // Pause the video
         if (videoRef.current) {
           videoRef.current.pause()
         }
       }
     } catch (err) {
-      console.error('Error stopping vision:', err)
       setError(err instanceof Error ? err.message : 'Failed to stop vision service')
     } finally {
       setLoading(false)
@@ -205,7 +220,43 @@ function App() {
         </div>
 
         <div className="results-card">
-          <h3>Detected Text</h3>
+          <h3>🤖 AI Cooking Advice</h3>
+          {isGettingAdvice && (
+            <div style={{ 
+              padding: '10px', 
+              backgroundColor: '#f0f9ff', 
+              borderRadius: '8px',
+              marginBottom: '10px',
+              color: '#0369a1'
+            }}>
+              💭 Getting advice from ChatGPT...
+            </div>
+          )}
+          <div className="results-list">
+            {chatAdvice.length > 0 ? (
+              chatAdvice.map((item, index) => (
+                <div key={index} className="result-item" style={{
+                  backgroundColor: '#f0fdf4',
+                  borderLeft: '4px solid #22c55e'
+                }}>
+                  <span className="result-timestamp">
+                    {new Date(item.timestamp).toLocaleTimeString()}
+                  </span>
+                  <p style={{ fontWeight: 500, color: '#166534' }}>
+                    {item.advice}
+                  </p>
+                </div>
+              ))
+            ) : (
+              <div className="results-empty">
+                No AI advice yet. Start the vision service to get real-time cooking tips!
+              </div>
+            )}
+          </div>
+        </div>
+
+        <div className="results-card">
+          <h3>👁️ Vision Detection</h3>
           <div className="results-list">
             {results.length > 0 ? (
               results.map((result, index) => (
