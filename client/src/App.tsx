@@ -8,9 +8,11 @@ interface AdviceItem {
 }
 
 type TabType = 'video' | 'camera'
+type ModeType = 'cooking' | 'school'
 
 function App() {
   const [activeTab, setActiveTab] = useState<TabType>('video')
+  const [mode, setMode] = useState<ModeType>('cooking')
   const [isRunning, setIsRunning] = useState(false)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -27,6 +29,15 @@ function App() {
   const sessionId = useRef<string>(`session-${Date.now()}`)
   const lastAdviceCallTime = useRef<number>(0)
   const adviceTimeoutRef = useRef<number | null>(null)
+
+  // Function to get the prompt based on the current mode
+  const getPromptForMode = () => {
+    if (mode === 'cooking') {
+      return "You are a master chef watching another chef cook. Describe what you see, including the ingredients and the steps of the recipe. Focus more on the chef's actions over the background."
+    } else {
+      return "You are a math tutor observing a student working on a math problem. Describe the current status of the in-progress math problem you see. Focus on what equations, numbers, or work is being shown."
+    }
+  }
 
   // Function to get ChatGPT advice with debouncing
   const getChatAdvice = (visionResult: string) => {
@@ -72,7 +83,8 @@ function App() {
         body: JSON.stringify({
           visionResult,
           sessionId: sessionId.current,
-          recipeContext: recipeDescription
+          recipeContext: recipeDescription,
+          mode: mode
         }),
       })
 
@@ -106,7 +118,7 @@ function App() {
     visionRef.current = new RealtimeVision({
       apiUrl: 'https://cluster1.overshoot.ai/api/v0.2',
       apiKey: import.meta.env.VITE_OVERSHOOT_API_KEY || 'your-api-key',
-      prompt: "You are a master chef watching another chef cook. Describe what you see, including the ingredients and the steps of the recipe. Focus more on the chef's actions over the background.",
+      prompt: getPromptForMode(),
       source: { type: 'video', file: videoFile },
       onResult: (result) => {
         setResults(prev => [result.result, ...prev].slice(0, 10))
@@ -122,7 +134,7 @@ function App() {
         URL.revokeObjectURL(videoUrl)
       }
     }
-  }, [videoFile, activeTab])
+  }, [videoFile, activeTab, mode])
 
   // Camera effect
   useEffect(() => {
@@ -135,7 +147,7 @@ function App() {
     visionRef.current = new RealtimeVision({
       apiUrl: 'https://cluster1.overshoot.ai/api/v0.2',
       apiKey: import.meta.env.VITE_OVERSHOOT_API_KEY || 'your-api-key',
-      prompt: "You are a master chef watching another chef cook. Describe what you see, including the ingredients and the steps of the recipe. Focus more on the chef's actions over the background.",
+      prompt: getPromptForMode(),
       source: { type: 'camera', cameraFacing: 'user' },
       onResult: (result) => {
         setResults(prev => [result.result, ...prev].slice(0, 10))
@@ -148,7 +160,27 @@ function App() {
         visionRef.current.stop().catch(() => {})
       }
     }
-  }, [activeTab])
+  }, [activeTab, mode])
+
+  // Handle mode change
+  const handleModeChange = (newMode: ModeType) => {
+    if (isRunning) {
+      handleStop()
+    }
+    // Clear pending advice timeout
+    if (adviceTimeoutRef.current) {
+      clearTimeout(adviceTimeoutRef.current)
+      adviceTimeoutRef.current = null
+    }
+    setMode(newMode)
+    setResults([])
+    setChatAdvice([])
+    setError(null)
+    setIsRateLimited(false)
+    setIsGettingAdvice(false)
+    lastAdviceCallTime.current = 0
+    sessionId.current = `session-${Date.now()}`
+  }
 
   // Handle tab change
   const handleTabChange = (tab: TabType) => {
@@ -255,11 +287,27 @@ function App() {
   return (
     <div className="app">
       <header className="app-header">
-        <h1>🍳 Cooking Aide</h1>
-        <p>Real-time Vision Text Recognition</p>
+        <h1>{mode === 'cooking' ? '🍳 Cooking Aide' : '📚 School Aide'}</h1>
+        <p>Real-time Vision AI Assistant</p>
       </header>
       
       <main className="app-main">
+        {/* Mode Selection */}
+        <div className="tabs" style={{ marginBottom: '10px' }}>
+          <button
+            className={`tab ${mode === 'cooking' ? 'active' : ''}`}
+            onClick={() => handleModeChange('cooking')}
+          >
+            🍳 Cooking
+          </button>
+          <button
+            className={`tab ${mode === 'school' ? 'active' : ''}`}
+            onClick={() => handleModeChange('school')}
+          >
+            📚 School
+          </button>
+        </div>
+
         {/* Tab Navigation */}
         <div className="tabs">
           <button
@@ -280,7 +328,7 @@ function App() {
           type="text"
           value={recipeDescription}
           onChange={(e) => setRecipeDescription(e.target.value)}
-          placeholder="What are you making?"
+          placeholder={mode === 'cooking' ? "What are you making?" : "What topic are you studying?"}
           className="recipe-input"
         />
 
@@ -379,7 +427,7 @@ function App() {
           </div>
 
           <div className="results-card">
-            <h3>🤖 AI Cooking Advice</h3>
+            <h3>{mode === 'cooking' ? '🤖 AI Cooking Advice' : '🤖 AI Math Tutoring'}</h3>
             {isGettingAdvice && (
               <div style={{ 
                 padding: '10px', 
@@ -419,7 +467,9 @@ function App() {
                 ))
               ) : (
                 <div className="results-empty">
-                  No AI advice yet. Start the vision service to get real-time cooking tips!
+                  {mode === 'cooking' 
+                    ? 'No AI advice yet. Start the vision service to get real-time cooking tips!'
+                    : 'No AI advice yet. Start the vision service to get real-time math tutoring!'}
                 </div>
               )}
             </div>

@@ -26,7 +26,7 @@ const lastCallTime = new Map<string, number>();
 
 router.post('/advice', async (req, res) => {
   try {
-    const { visionResult, sessionId = 'default', recipeContext = '' } = req.body;
+    const { visionResult, sessionId = 'default', recipeContext = '', mode = 'cooking' } = req.body;
 
     if (!visionResult) {
       return res.status(400).json({ error: 'Vision result is required' });
@@ -46,10 +46,8 @@ router.post('/advice', async (req, res) => {
 
     // Get or initialize conversation history for this session
     if (!conversationHistory.has(sessionId)) {
-      conversationHistory.set(sessionId, [
-        {
-          role: 'system',
-          content: `You are a helpful cooking assistant providing real-time advice to someone cooking. 
+      const systemPrompt = mode === 'cooking' 
+        ? `You are a helpful cooking assistant providing real-time advice to someone cooking. 
 You receive descriptions of what's happening in their kitchen from a vision AI. 
 Your job is to:
 1. Provide helpful, actionable cooking tips and advice
@@ -59,6 +57,22 @@ Your job is to:
 5. Be encouraging and supportive
 
 Only respond if there's something meaningful to say. If the vision result shows nothing significant is happening, just acknowledge it briefly.`
+        : `You are a helpful math tutor providing real-time guidance to a student working on math problems.
+You receive descriptions of the current status of their in-progress math problem from a vision AI.
+Your job is to:
+1. Describe what you see in the math problem and its current state
+2. Provide helpful hints and guidance without giving away the full solution
+3. Identify any mistakes or correct steps they've taken
+4. Suggest next logical steps in solving the problem
+5. Keep your responses concise (2-3 sentences max)
+6. Be encouraging and supportive
+
+Focus on helping the student understand the process. If the vision result shows nothing significant, acknowledge it briefly.`;
+      
+      conversationHistory.set(sessionId, [
+        {
+          role: 'system',
+          content: systemPrompt
         }
       ]);
     }
@@ -66,9 +80,13 @@ Only respond if there's something meaningful to say. If the vision result shows 
     const history = conversationHistory.get(sessionId)!;
 
     // Add the new vision result to the conversation
+    const userMessage = mode === 'cooking' 
+      ? `What I'm seeing in the kitchen: ${visionResult}`
+      : `Current status of the math problem: ${visionResult}`;
+    
     history.push({
       role: 'user',
-      content: `What I'm seeing in the kitchen: ${visionResult}`
+      content: userMessage
     });
 
     // Keep only last 5 vision messages (10 messages total: 5 user + 5 assistant, plus system message)
